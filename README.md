@@ -4,6 +4,10 @@
 
 Connect to all your clusters at once, browse and edit every resource (CRDs included), stream aggregated logs, open shells into containers, forward ports, watch metrics, and inspect Helm releases — all from one polished web UI that runs entirely on your machine.
 
+![Overview dashboard — cluster health at a glance](docs/screenshot-overview.png)
+
+![Pods list with live status](docs/screenshot-pods.png)
+
 ## Features
 
 - **Multi-cluster, unified view** — connect to any number of kubeconfig contexts simultaneously; lists merge resources from all selected clusters with a cluster column.
