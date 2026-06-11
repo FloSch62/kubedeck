@@ -12,7 +12,7 @@ export function statusColor(status: string): 'success' | 'error' | 'warning' | '
   return 'default';
 }
 
-export function StatusChip({ status }: { status: string }) {
+export function StatusChip({ status, label }: { status: string; label?: string }) {
   if (!status) return null;
   const color = statusColor(status);
   return (
@@ -29,7 +29,7 @@ export function StatusChip({ status }: { status: string }) {
       }}
     >
       <CircleIcon sx={{ fontSize: 7, opacity: color === 'default' ? 0.6 : 1 }} />
-      {status}
+      {label ?? status}
     </Box>
   );
 }

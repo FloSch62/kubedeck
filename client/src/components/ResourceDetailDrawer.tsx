@@ -1,14 +1,19 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Box, Drawer, FormControlLabel, IconButton, Stack, Switch, Tab, Tabs, Typography } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import yaml from 'js-yaml';
 import type { KubeObject } from '@kubedeck/shared';
 import { useApplyResource, useResource, useResourceEvents } from '../api/queries.js';
 import { YamlEditor } from './YamlEditor.js';
 import { GenericDetail } from './detail/GenericDetail.js';
 import { PodDetail } from './detail/PodDetail.js';
+import { NodeDetail } from './detail/NodeDetail.js';
+import { ServiceDetail } from './detail/ServiceDetail.js';
+import { SecretDetail } from './detail/SecretDetail.js';
 import { AgeCell } from './AgeCell.js';
 import { MetricsChart } from './MetricsChart.js';
+import { RowActions } from './RowActions.js';
 
 export interface ResourceSelection {
   ctx: string;
@@ -23,12 +28,20 @@ export interface ResourceSelection {
 interface Props {
   sel: ResourceSelection | undefined;
   onClose: () => void;
+  onBack?: () => void;
 }
 
-export function ResourceDetailDrawer({ sel, onClose }: Props) {
+export function ResourceDetailDrawer({ sel, onClose, onBack }: Props) {
   const [tab, setTab] = useState('overview');
   const [reveal, setReveal] = useState(false);
   const isSecret = sel?.kind === 'Secret';
+
+  // Reset per-resource view state when the selection changes.
+  const selKey = sel ? `${sel.ctx}|${sel.kind}|${sel.namespace ?? ''}|${sel.name}` : '';
+  useEffect(() => {
+    setTab('overview');
+    setReveal(false);
+  }, [selKey]);
   const { data: obj, refetch } = useResource(sel ? { ...sel, reveal: isSecret && reveal } : undefined);
   const { data: events } = useResourceEvents(tab === 'events' && sel ? { ctx: sel.ctx, name: sel.name, kind: sel.kind, namespace: sel.namespace } : undefined);
   const apply = useApplyResource();
@@ -55,6 +68,11 @@ export function ResourceDetailDrawer({ sel, onClose }: Props) {
       {sel && (
         <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
           <Stack direction="row" alignItems="center" sx={{ px: 2, py: 1, borderBottom: 1, borderColor: 'divider' }}>
+            {onBack && (
+              <IconButton onClick={onBack} sx={{ mr: 1 }}>
+                <ArrowBackIcon />
+              </IconButton>
+            )}
             <Box sx={{ minWidth: 0 }}>
               <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block' }}>
                 {sel.ctx} ·{' '}
@@ -78,6 +96,7 @@ export function ResourceDetailDrawer({ sel, onClose }: Props) {
               </Typography>
             </Box>
             <Box sx={{ flex: 1 }} />
+            {obj && <RowActions target={{ ctx: sel.ctx, group: sel.group, version: sel.version, plural: sel.plural, kind: sel.kind, obj }} />}
             <IconButton onClick={onClose}>
               <CloseIcon />
             </IconButton>
@@ -89,7 +108,7 @@ export function ResourceDetailDrawer({ sel, onClose }: Props) {
             {hasMetrics && <Tab value="metrics" label="Metrics" sx={{ minHeight: 36 }} />}
           </Tabs>
           <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
-            {tab === 'overview' && obj && (sel.kind === 'Pod' ? <PodDetail obj={obj} ctx={sel.ctx} /> : <GenericDetail obj={obj} ctx={sel.ctx} />)}
+            {tab === 'overview' && obj && <OverviewForKind kind={sel.kind} obj={obj} ctx={sel.ctx} />}
             {tab === 'yaml' && (
               <YamlEditor
                 value={yamlText}
@@ -113,6 +132,21 @@ export function ResourceDetailDrawer({ sel, onClose }: Props) {
       )}
     </Drawer>
   );
+}
+
+function OverviewForKind({ kind, obj, ctx }: { kind: string; obj: KubeObject; ctx: string }) {
+  switch (kind) {
+    case 'Pod':
+      return <PodDetail obj={obj} ctx={ctx} />;
+    case 'Node':
+      return <NodeDetail obj={obj} ctx={ctx} />;
+    case 'Service':
+      return <ServiceDetail obj={obj} ctx={ctx} />;
+    case 'Secret':
+      return <SecretDetail obj={obj} ctx={ctx} />;
+    default:
+      return <GenericDetail obj={obj} ctx={ctx} />;
+  }
 }
 
 function EventsList({ events }: { events: KubeObject[] }) {

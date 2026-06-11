@@ -1,10 +1,10 @@
-import type { KubeObject, WatchEventType, WatchServerMessage, WatchSubMessage } from '@kubedeck/shared';
+import type { KubeObject, WatchEventType, WatchServerMessage, WatchStatusState, WatchSubMessage } from '@kubedeck/shared';
 import { wsUrl } from '../http.js';
 
 export interface WatchHandlers {
   onSnapshot(items: KubeObject[]): void;
   onEvents(events: Array<{ type: WatchEventType; object: KubeObject }>): void;
-  onStatus(state: 'live' | 'reconnecting' | 'error', message?: string): void;
+  onStatus(state: WatchStatusState, message?: string): void;
 }
 
 export type BroadcastHandler = (msg: Extract<WatchServerMessage, { op: 'drain-progress' | 'pf-update' | 'contexts-changed' }>) => void;

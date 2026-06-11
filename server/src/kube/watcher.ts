@@ -1,6 +1,6 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import type { FastifyBaseLogger } from 'fastify';
-import type { KubeObject, WatchEventType } from '@kubedeck/shared';
+import type { KubeObject, WatchEventType, WatchStatusState } from '@kubedeck/shared';
 import { RawClient, resourcePath } from './raw-client.js';
 
 export interface WatcherDelta {
@@ -10,7 +10,7 @@ export interface WatcherDelta {
 
 export interface WatcherSubscriber {
   onDeltas(deltas: WatcherDelta[]): void;
-  onStatus(state: 'live' | 'reconnecting' | 'error', message?: string): void;
+  onStatus(state: WatchStatusState, message?: string): void;
 }
 
 interface WatchLine {
@@ -33,8 +33,9 @@ export class ResourceWatcher {
   private subscribers = new Set<WatcherSubscriber>();
   private abort?: AbortController;
   private running = false;
+  private unavailable = false;
   private initialList?: Promise<void>;
-  private state: 'live' | 'reconnecting' | 'error' = 'reconnecting';
+  private state: WatchStatusState = 'reconnecting';
 
   constructor(
     private raw: RawClient,
@@ -48,7 +49,15 @@ export class ResourceWatcher {
   /** Resolves once the initial LIST populated the cache. */
   ready(): Promise<void> {
     if (!this.running) this.start();
-    this.initialList ??= this.listInto(this.cache).then(() => undefined);
+    this.initialList ??= this.listInto(this.cache)
+      .then(() => undefined)
+      .catch((err) => {
+        if (isUnavailable(err)) {
+          this.markUnavailable(err);
+          return;
+        }
+        throw err;
+      });
     return this.initialList;
   }
 
@@ -61,7 +70,7 @@ export class ResourceWatcher {
     return [...this.cache.values()];
   }
 
-  currentState(): 'live' | 'reconnecting' | 'error' {
+  currentState(): WatchStatusState {
     return this.state;
   }
 
@@ -75,7 +84,7 @@ export class ResourceWatcher {
   }
 
   start(): void {
-    if (this.running) return;
+    if (this.running || this.unavailable) return;
     this.running = true;
     void this.loop();
   }
@@ -96,7 +105,7 @@ export class ResourceWatcher {
     }
   }
 
-  private setState(state: 'live' | 'reconnecting' | 'error', message?: string): void {
+  private setState(state: WatchStatusState, message?: string): void {
     if (this.state === state) return;
     this.state = state;
     for (const sub of this.subscribers) {
@@ -106,6 +115,17 @@ export class ResourceWatcher {
         /* subscriber gone */
       }
     }
+  }
+
+  private markUnavailable(err: unknown): void {
+    const old = [...this.cache.values()];
+    this.cache.clear();
+    this.rv = '';
+    this.unavailable = true;
+    this.running = false;
+    this.abort?.abort();
+    this.emitDeltas(old.map((object) => ({ type: 'DELETED', object })));
+    this.setState('unavailable', missingResourceMessage(this.group, this.version, this.plural, err));
   }
 
   private path(query: URLSearchParams): string {
@@ -138,11 +158,17 @@ export class ResourceWatcher {
         if (!this.rv) {
           await this.ready();
         }
+        if (this.unavailable) break;
         this.setState('live');
         backoff = MIN_BACKOFF_MS;
         await this.watchOnce();
       } catch (err) {
         if (!this.running) break;
+        if (isUnavailable(err)) {
+          this.log.info({ gvr: `${this.group}/${this.version}/${this.plural}` }, 'resource API unavailable, stopping watch');
+          this.markUnavailable(err);
+          break;
+        }
         const gone = isGone(err);
         if (gone) {
           this.log.info({ gvr: `${this.group}/${this.version}/${this.plural}` }, 'watch expired (410), relisting');
@@ -240,6 +266,21 @@ function isGone(err: unknown): boolean {
   if (err instanceof GoneError) return true;
   const code = (err as { code?: number })?.code;
   return code === 410;
+}
+
+function isUnavailable(err: unknown): boolean {
+  const code = (err as { code?: number })?.code;
+  return code === 404;
+}
+
+function missingResourceMessage(group: string, version: string, plural: string, err: unknown): string {
+  const gvr = `${group ? `${group}/` : ''}${version}/${plural}`;
+  const bodyMessage =
+    typeof (err as { body?: { message?: unknown } })?.body?.message === 'string'
+      ? String((err as { body: { message: unknown } }).body.message)
+      : undefined;
+  if (bodyMessage && bodyMessage !== '404 page not found') return bodyMessage;
+  return `Resource API ${gvr} is not installed on this cluster.`;
 }
 
 /** Normalize objects before caching: drop managedFields, fill kind/apiVersion. */

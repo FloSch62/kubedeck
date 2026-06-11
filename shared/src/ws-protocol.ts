@@ -22,6 +22,7 @@ export type WatchClientMessage = z.infer<typeof watchClientMessageSchema>;
 export type WatchSubMessage = Extract<WatchClientMessage, { op: 'sub' }>;
 
 export type WatchEventType = 'ADDED' | 'MODIFIED' | 'DELETED';
+export type WatchStatusState = 'live' | 'reconnecting' | 'error' | 'unavailable';
 
 /** Messages the server sends on /ws/watch. */
 export type WatchServerMessage =
@@ -29,7 +30,7 @@ export type WatchServerMessage =
   | { op: 'event'; id: string; type: WatchEventType; object: KubeObject }
   /** Batched form of `event` — what the server actually sends under load. */
   | { op: 'events'; id: string; events: Array<{ type: WatchEventType; object: KubeObject }> }
-  | { op: 'status'; id: string; state: 'live' | 'reconnecting' | 'error'; message?: string }
+  | { op: 'status'; id: string; state: WatchStatusState; message?: string }
   | { op: 'drain-progress'; drainId: string; evicted: number; total: number; current?: string; done?: boolean; error?: string }
   | { op: 'pf-update'; forwards: PortForwardInfo[] }
   | { op: 'contexts-changed' };

@@ -82,9 +82,24 @@ export interface ScaleRequest {
 }
 
 export interface RolloutRestartRequest {
+  kind: 'Deployment' | 'StatefulSet' | 'DaemonSet' | 'ReplicaSet';
+  namespace: string;
+  name: string;
+}
+
+export interface SuspendCronJobRequest {
+  namespace: string;
+  name: string;
+  suspend: boolean;
+}
+
+export interface SetImageRequest {
   kind: 'Deployment' | 'StatefulSet' | 'DaemonSet';
   namespace: string;
   name: string;
+  container: string;
+  image: string;
+  initContainer?: boolean;
 }
 
 export interface CordonRequest {
@@ -107,6 +122,54 @@ export interface DrainStartedResponse {
 export interface TriggerCronJobRequest {
   namespace: string;
   name: string;
+}
+
+// ---- Detail views ----
+
+export interface PodEnvVar {
+  name: string;
+  value?: string;
+  source?: {
+    type: 'literal' | 'configMapKeyRef' | 'secretKeyRef' | 'fieldRef' | 'resourceFieldRef' | 'configMapRef' | 'secretRef';
+    ref?: string;
+    key?: string;
+  };
+  /** Value comes from a Secret and is hidden unless requested with reveal. */
+  redacted?: boolean;
+  error?: string;
+}
+
+export interface PodEnvResponse {
+  containers: Array<{ name: string; init?: boolean; env: PodEnvVar[] }>;
+}
+
+export interface TlsCertInfo {
+  subject: string;
+  issuer: string;
+  serialNumber: string;
+  notBefore: string;
+  notAfter: string;
+  sans: string[];
+  isCA: boolean;
+  selfSigned: boolean;
+}
+
+export interface SecretTlsResponse {
+  certificates: TlsCertInfo[];
+}
+
+// ---- Logs ----
+
+export type LogTargetKind = 'Pod' | 'Deployment' | 'ReplicaSet' | 'StatefulSet' | 'DaemonSet' | 'Service';
+
+export interface LogTargetPod {
+  name: string;
+  namespace: string;
+  containers: string[];
+}
+
+export interface LogTargetPodsResponse {
+  pods: LogTargetPod[];
 }
 
 // ---- Metrics ----

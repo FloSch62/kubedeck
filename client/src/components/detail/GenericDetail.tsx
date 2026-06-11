@@ -20,7 +20,7 @@ export function KeyValueChips({ title, entries }: { title: string; entries: Reco
   );
 }
 
-export function ConditionsTable({ obj }: { obj: KubeObject }) {
+export function ConditionsTable({ obj, goodWhen }: { obj: KubeObject; goodWhen?: (type: string) => 'True' | 'False' }) {
   const conditions = (obj.status as { conditions?: Array<{ type: string; status: string; reason?: string; message?: string; lastTransitionTime?: string }> })?.conditions;
   if (!conditions?.length) return null;
   return (
@@ -39,11 +39,14 @@ export function ConditionsTable({ obj }: { obj: KubeObject }) {
           </TableRow>
         </TableHead>
         <TableBody>
-          {conditions.map((c) => (
+          {conditions.map((c) => {
+            const expected = goodWhen?.(c.type) ?? 'True';
+            const display = c.status === 'Unknown' ? 'Unknown' : c.status === expected ? 'Ready' : 'NotReady';
+            return (
             <TableRow key={c.type}>
               <TableCell>{c.type}</TableCell>
               <TableCell>
-                <StatusChip status={c.status === 'True' ? 'Ready' : c.status === 'False' ? 'NotReady' : 'Unknown'} />
+                <StatusChip status={display} label={c.status} />
               </TableCell>
               <TableCell>{c.reason ?? ''}</TableCell>
               <TableCell sx={{ maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis' }} title={c.message}>
@@ -53,14 +56,15 @@ export function ConditionsTable({ obj }: { obj: KubeObject }) {
                 <AgeCell timestamp={c.lastTransitionTime} />
               </TableCell>
             </TableRow>
-          ))}
+            );
+          })}
         </TableBody>
       </Table>
     </Box>
   );
 }
 
-export function GenericDetail({ obj, ctx }: { obj: KubeObject; ctx: string }) {
+export function GenericDetail({ obj, ctx, hideConditions }: { obj: KubeObject; ctx: string; hideConditions?: boolean }) {
   return (
     <Stack spacing={2} sx={{ p: 2 }}>
       <Box>
@@ -85,8 +89,12 @@ export function GenericDetail({ obj, ctx }: { obj: KubeObject; ctx: string }) {
       </Box>
       <KeyValueChips title="Labels" entries={obj.metadata.labels} />
       <KeyValueChips title="Annotations" entries={obj.metadata.annotations} />
-      <Divider />
-      <ConditionsTable obj={obj} />
+      {!hideConditions && (
+        <>
+          <Divider />
+          <ConditionsTable obj={obj} />
+        </>
+      )}
     </Stack>
   );
 }

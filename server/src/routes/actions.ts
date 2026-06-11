@@ -1,8 +1,8 @@
 import { nanoid } from 'nanoid';
 import type { FastifyInstance } from 'fastify';
-import { groupFromPath, type CordonRequest, type DrainRequest, type RolloutRestartRequest, type ScaleRequest, type TriggerCronJobRequest } from '@kubedeck/shared';
+import { groupFromPath, type CordonRequest, type DrainRequest, type RolloutRestartRequest, type ScaleRequest, type SetImageRequest, type SuspendCronJobRequest, type TriggerCronJobRequest } from '@kubedeck/shared';
 import type { AppContext } from '../app.js';
-import { drainNode, rolloutRestart, scaleResource, setCordon, triggerCronJob, type DrainProgress } from '../kube/actions.js';
+import { drainNode, rolloutRestart, scaleResource, setCordon, setCronJobSuspend, setImage, triggerCronJob, type DrainProgress } from '../kube/actions.js';
 import { sendError } from '../util/errors.js';
 import { broadcastWatchMessage } from '../ws/watch-socket.js';
 
@@ -45,6 +45,28 @@ export function registerActionRoutes(app: FastifyInstance, ctx: AppContext): voi
     try {
       const handle = ctx.clusters.get(req.params.ctx);
       return await triggerCronJob(handle, req.body.namespace, req.body.name);
+    } catch (err) {
+      sendError(reply, err);
+      return reply;
+    }
+  });
+
+  app.post<{ Params: { ctx: string }; Body: SuspendCronJobRequest }>('/api/contexts/:ctx/actions/suspend-cronjob', async (req, reply) => {
+    try {
+      const handle = ctx.clusters.get(req.params.ctx);
+      await setCronJobSuspend(handle, req.body.namespace, req.body.name, req.body.suspend);
+      return { ok: true };
+    } catch (err) {
+      sendError(reply, err);
+      return reply;
+    }
+  });
+
+  app.post<{ Params: { ctx: string }; Body: SetImageRequest }>('/api/contexts/:ctx/actions/set-image', async (req, reply) => {
+    try {
+      const handle = ctx.clusters.get(req.params.ctx);
+      await setImage(handle, req.body);
+      return { ok: true };
     } catch (err) {
       sendError(reply, err);
       return reply;

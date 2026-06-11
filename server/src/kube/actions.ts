@@ -1,5 +1,5 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import type { KubeObject, RolloutRestartRequest } from '@kubedeck/shared';
+import type { KubeObject, RolloutRestartRequest, SetImageRequest } from '@kubedeck/shared';
 import type { ClusterHandle } from './cluster-manager.js';
 import { resourcePath } from './raw-client.js';
 import { HttpProblem } from '../util/errors.js';
@@ -8,6 +8,7 @@ const KIND_TO_PLURAL: Record<RolloutRestartRequest['kind'], string> = {
   Deployment: 'deployments',
   StatefulSet: 'statefulsets',
   DaemonSet: 'daemonsets',
+  ReplicaSet: 'replicasets',
 };
 
 export async function scaleResource(handle: ClusterHandle, group: string, version: string, plural: string, namespace: string, name: string, replicas: number): Promise<void> {
@@ -20,6 +21,10 @@ export async function scaleResource(handle: ClusterHandle, group: string, versio
 }
 
 export async function rolloutRestart(handle: ClusterHandle, kind: RolloutRestartRequest['kind'], namespace: string, name: string): Promise<void> {
+  if (kind === 'ReplicaSet') {
+    await restartReplicaSet(handle, namespace, name);
+    return;
+  }
   const path = resourcePath('apps', 'v1', KIND_TO_PLURAL[kind], { namespace, name });
   const patch = {
     spec: {
@@ -31,6 +36,50 @@ export async function rolloutRestart(handle: ClusterHandle, kind: RolloutRestart
     },
   };
   await handle.raw.json(path, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/strategic-merge-patch+json' },
+    body: JSON.stringify(patch),
+  });
+}
+
+/**
+ * ReplicaSets have no rollout machinery — the controller only reconciles
+ * replica count, so a pod-template annotation patch does nothing. Restart
+ * means deleting the pods it owns and letting it recreate them.
+ */
+async function restartReplicaSet(handle: ClusterHandle, namespace: string, name: string): Promise<void> {
+  const rs = await handle.raw.json<KubeObject>(resourcePath('apps', 'v1', 'replicasets', { namespace, name }));
+  const rsUid = rs.metadata.uid;
+  const matchLabels = (rs.spec as { selector?: { matchLabels?: Record<string, string> } })?.selector?.matchLabels ?? {};
+  const query = new URLSearchParams();
+  const selector = Object.entries(matchLabels)
+    .map(([k, v]) => `${k}=${v}`)
+    .join(',');
+  if (selector) query.set('labelSelector', selector);
+  const pods = await handle.raw.json<{ items: KubeObject[] }>(resourcePath('', 'v1', 'pods', { namespace, query }));
+  const owned = pods.items.filter((p) => (p.metadata.ownerReferences ?? []).some((o) => o.uid === rsUid && o.controller));
+  for (const pod of owned) {
+    await handle.raw.json(resourcePath('', 'v1', 'pods', { namespace, name: pod.metadata.name }), { method: 'DELETE' });
+  }
+}
+
+export async function setCronJobSuspend(handle: ClusterHandle, namespace: string, name: string, suspend: boolean): Promise<void> {
+  await handle.raw.json(resourcePath('batch', 'v1', 'cronjobs', { namespace, name }), {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/merge-patch+json' },
+    body: JSON.stringify({ spec: { suspend } }),
+  });
+}
+
+export async function setImage(handle: ClusterHandle, req: SetImageRequest): Promise<void> {
+  if (!req.image || /\s/.test(req.image)) {
+    throw new HttpProblem(422, 'image must be a non-empty reference without whitespace');
+  }
+  const listKey = req.initContainer ? 'initContainers' : 'containers';
+  // Strategic merge patch merges container lists by name, so this updates
+  // exactly the one container.
+  const patch = { spec: { template: { spec: { [listKey]: [{ name: req.container, image: req.image }] } } } };
+  await handle.raw.json(resourcePath('apps', 'v1', KIND_TO_PLURAL[req.kind], { namespace: req.namespace, name: req.name }), {
     method: 'PATCH',
     headers: { 'content-type': 'application/strategic-merge-patch+json' },
     body: JSON.stringify(patch),

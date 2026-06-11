@@ -4,10 +4,16 @@ import { TopBar } from './TopBar.js';
 import { NavDrawer } from './NavDrawer.js';
 import { BottomDock } from './BottomDock.js';
 import { useDockStore } from '../state/dock.js';
+import { useDetailStore } from '../state/detail.js';
+import { ResourceDetailDrawer } from '../components/ResourceDetailDrawer.js';
 
 export function AppShell() {
   const dockOpen = useDockStore((s) => s.open);
   const dockHeight = useDockStore((s) => s.height);
+  const maximized = useDockStore((s) => s.maximized);
+  const stack = useDetailStore((s) => s.stack);
+  const back = useDetailStore((s) => s.back);
+  const closeDetail = useDetailStore((s) => s.close);
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
       <TopBar />
@@ -17,11 +23,12 @@ export function AppShell() {
           <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
             <Outlet />
           </Box>
-          <Box sx={{ height: dockOpen ? dockHeight : 0, flexShrink: 0, transition: 'height 120ms ease' }}>
+          <Box sx={{ height: dockOpen ? (maximized ? '100%' : dockHeight) : 0, flexShrink: 0, transition: 'height 120ms ease' }}>
             <BottomDock />
           </Box>
         </Box>
       </Box>
+      <ResourceDetailDrawer sel={stack.at(-1)} onClose={closeDetail} onBack={stack.length > 1 ? back : undefined} />
     </Box>
   );
 }

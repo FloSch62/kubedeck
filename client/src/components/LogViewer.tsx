@@ -1,33 +1,109 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Box, Chip, IconButton, TextField, ToggleButton, Tooltip, Typography } from '@mui/material';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Box, Chip, IconButton, MenuItem, Select, TextField, ToggleButton, Tooltip, Typography } from '@mui/material';
 import DownloadIcon from '@mui/icons-material/Download';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import PauseIcon from '@mui/icons-material/Pause';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import DeleteSweepIcon from '@mui/icons-material/DeleteSweep';
+import WrapTextIcon from '@mui/icons-material/WrapText';
+import AccessTimeIcon from '@mui/icons-material/AccessTime';
+import FullscreenIcon from '@mui/icons-material/Fullscreen';
+import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
+import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import type { LogServerMessage } from '@kubedeck/shared';
 import { wsUrl } from '../api/http.js';
-import type { LogsTab } from '../state/dock.js';
+import { useDockStore, type LogsTab } from '../state/dock.js';
+import { useLogPrefsStore, type TsMode } from '../state/log-prefs.js';
+import { markSegs, parseLine, stripAnsi, type Seg } from './log-format.js';
 
 interface LogLine {
   pod: string;
   container: string;
   ts?: string;
   line: string;
+  receivedAt: number;
 }
 
 const POD_COLORS = ['#7aa2f7', '#9ece6a', '#e0af68', '#f7768e', '#bb9af7', '#7dcfff', '#ff9e64', '#73daca'];
 const MAX_LINES = 20_000;
 const ROW_HEIGHT = 20;
+type LogTimeMode = 'live' | '10m' | '1h' | '6h' | '24h' | 'terminated';
+
+const TIME_OPTIONS: Array<{ value: LogTimeMode; label: string; params: { follow: boolean; tailLines?: number; sinceSeconds?: number; previous?: boolean } }> = [
+  { value: 'live', label: 'Live tail', params: { follow: true, tailLines: 500 } },
+  { value: '10m', label: '10m ago', params: { follow: false, sinceSeconds: 10 * 60 } },
+  { value: '1h', label: '1h ago', params: { follow: false, sinceSeconds: 60 * 60 } },
+  { value: '6h', label: '6h ago', params: { follow: false, sinceSeconds: 6 * 60 * 60 } },
+  { value: '24h', label: '24h ago', params: { follow: false, sinceSeconds: 24 * 60 * 60 } },
+  { value: 'terminated', label: 'Terminated', params: { follow: false, tailLines: 500, previous: true } },
+];
+
+const CLS_COLORS: Record<NonNullable<Seg['cls']>, string> = {
+  key: '#7aa2f7',
+  str: '#9ece6a',
+  num: '#e0af68',
+  bool: '#bb9af7',
+  punct: '#6b7089',
+};
+
+const segCache = new WeakMap<LogLine, Seg[]>();
+const stripCache = new WeakMap<LogLine, string>();
+
+function strippedOf(l: LogLine): string {
+  let s = stripCache.get(l);
+  if (s === undefined) {
+    s = stripAnsi(l.line);
+    stripCache.set(l, s);
+  }
+  return s;
+}
+
+function segsOf(l: LogLine): Seg[] {
+  let segs = segCache.get(l);
+  if (!segs) {
+    segs = parseLine(l.line);
+    segCache.set(l, segs);
+  }
+  return segs;
+}
+
+function fmtTs(ts: string, mode: TsMode): string {
+  if (mode === 'utc') return `${ts.slice(11, 23)}Z`;
+  const d = new Date(ts);
+  return `${d.toLocaleTimeString(undefined, { hour12: false })}.${String(d.getMilliseconds()).padStart(3, '0')}`;
+}
+
+function initialTimeMode(tab: LogsTab): LogTimeMode {
+  if (tab.previous) return 'terminated';
+  if (tab.sinceSeconds === 10 * 60) return '10m';
+  if (tab.sinceSeconds === 60 * 60) return '1h';
+  if (tab.sinceSeconds === 6 * 60 * 60) return '6h';
+  if (tab.sinceSeconds === 24 * 60 * 60) return '24h';
+  return 'live';
+}
+
+function paramsForMode(mode: LogTimeMode): (typeof TIME_OPTIONS)[number]['params'] {
+  return TIME_OPTIONS.find((opt) => opt.value === mode)?.params ?? TIME_OPTIONS[0]!.params;
+}
 
 export function LogViewer({ tab }: { tab: LogsTab }) {
   const [lines, setLines] = useState<LogLine[]>([]);
   const [filter, setFilter] = useState('');
+  const [find, setFind] = useState('');
+  const [cursor, setCursor] = useState(0);
   const [follow, setFollow] = useState(true);
+  const [timeMode, setTimeMode] = useState<LogTimeMode>(() => initialTimeMode(tab));
   const [statusText, setStatusText] = useState('connecting…');
   const bufferRef = useRef<LogLine[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const findRef = useRef<HTMLInputElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewHeight, setViewHeight] = useState(400);
+
+  const { wrap, tsMode, highlight, setWrap, cycleTsMode, setHighlight } = useLogPrefsStore();
+  const maximized = useDockStore((s) => s.maximized);
+  const setMaximized = useDockStore((s) => s.setMaximized);
 
   const podColor = useMemo(() => {
     const map = new Map<string, string>();
@@ -36,15 +112,21 @@ export function LogViewer({ tab }: { tab: LogsTab }) {
   }, [tab.pods]);
 
   useEffect(() => {
+    const modeParams = paramsForMode(timeMode);
+    setLines([]);
+    bufferRef.current = [];
+    setFollow(modeParams.follow);
+    setStatusText('connecting…');
     const ws = new WebSocket(
       wsUrl('/ws/logs', {
         ctx: tab.ctx,
         namespace: tab.namespace,
         pods: tab.pods.join(','),
         container: tab.container ?? '',
-        previous: tab.previous ?? false,
-        follow: true,
-        tailLines: 500,
+        previous: modeParams.previous ?? false,
+        follow: modeParams.follow,
+        tailLines: modeParams.tailLines ?? tab.tailLines,
+        sinceSeconds: modeParams.sinceSeconds ?? tab.sinceSeconds,
       }),
     );
     // Batch incoming lines into 120ms renders.
@@ -63,9 +145,9 @@ export function LogViewer({ tab }: { tab: LogsTab }) {
       try {
         const msg = JSON.parse(ev.data as string) as LogServerMessage;
         if (msg.op === 'line') {
-          bufferRef.current.push({ pod: msg.pod, container: msg.container, ts: msg.ts, line: msg.line });
+          bufferRef.current.push({ pod: msg.pod, container: msg.container, ts: msg.ts, line: msg.line, receivedAt: Date.now() });
         } else if (msg.op === 'pod-status' && msg.state === 'error') {
-          bufferRef.current.push({ pod: msg.pod, container: msg.container, line: `⚠ ${msg.message ?? 'stream error'}` });
+          bufferRef.current.push({ pod: msg.pod, container: msg.container, line: `⚠ ${msg.message ?? 'stream error'}`, receivedAt: Date.now() });
         }
       } catch {
         /* ignore malformed frames */
@@ -77,37 +159,78 @@ export function LogViewer({ tab }: { tab: LogsTab }) {
       ws.close();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab.id]);
+  }, [tab.id, timeMode]);
 
   const visible = useMemo(() => {
     if (!filter) return lines;
     try {
       const re = new RegExp(filter, 'i');
-      return lines.filter((l) => re.test(l.line) || re.test(l.pod));
+      return lines.filter((l) => re.test(strippedOf(l)) || re.test(l.pod));
     } catch {
       const f = filter.toLowerCase();
-      return lines.filter((l) => l.line.toLowerCase().includes(f) || l.pod.toLowerCase().includes(f));
+      return lines.filter((l) => strippedOf(l).toLowerCase().includes(f) || l.pod.toLowerCase().includes(f));
     }
   }, [lines, filter]);
+
+  const matches = useMemo(() => {
+    if (!find) return [];
+    const q = find.toLowerCase();
+    const idx: number[] = [];
+    for (let i = 0; i < visible.length; i++) {
+      if (strippedOf(visible[i]!).toLowerCase().includes(q)) idx.push(i);
+    }
+    return idx;
+  }, [visible, find]);
+
+  // Clamp the find cursor when the buffer rotates or the query changes.
+  useEffect(() => {
+    if (cursor >= matches.length) setCursor(Math.max(0, matches.length - 1));
+  }, [matches.length, cursor]);
+
+  const gotoMatch = useCallback(
+    (idx: number) => {
+      setFollow(false);
+      const el = scrollRef.current;
+      if (!el) return;
+      if (wrap) {
+        el.querySelector(`[data-idx="${idx}"]`)?.scrollIntoView({ block: 'center' });
+      } else {
+        el.scrollTop = idx * ROW_HEIGHT - el.clientHeight / 2;
+      }
+    },
+    [wrap],
+  );
+
+  const findStep = useCallback(
+    (dir: 1 | -1) => {
+      if (!matches.length) return;
+      const next = (cursor + dir + matches.length) % matches.length;
+      setCursor(next);
+      gotoMatch(matches[next]!);
+    },
+    [matches, cursor, gotoMatch],
+  );
 
   // Auto-scroll on new lines while following.
   useEffect(() => {
     if (follow && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [visible.length, follow]);
+  }, [visible.length, follow, wrap]);
 
   const onScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
-    setScrollTop(el.scrollTop);
-    setViewHeight(el.clientHeight);
+    if (!wrap) {
+      setScrollTop(el.scrollTop);
+      setViewHeight(el.clientHeight);
+    }
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
     if (!atBottom && follow) setFollow(false);
-  }, [follow]);
+  }, [follow, wrap]);
 
   const download = () => {
-    const text = visible.map((l) => `${l.ts ?? ''} [${l.pod}/${l.container}] ${l.line}`).join('\n');
+    const text = visible.map((l) => `${l.ts ?? ''} [${l.pod}/${l.container}] ${strippedOf(l)}`).join('\n');
     const blob = new Blob([text], { type: 'text/plain' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -116,19 +239,92 @@ export function LogViewer({ tab }: { tab: LogsTab }) {
     URL.revokeObjectURL(a.href);
   };
 
-  // Simple windowed rendering — only rows near the viewport mount.
-  const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - 20);
-  const end = Math.min(visible.length, Math.ceil((scrollTop + viewHeight) / ROW_HEIGHT) + 20);
+  const copyVisible = async () => {
+    const text = visible.map((l) => `${l.ts ?? ''} [${l.pod}/${l.container}] ${strippedOf(l)}`).join('\n');
+    await navigator.clipboard.writeText(text);
+  };
+
+  const recentRate = useMemo(() => {
+    const cutoff = Date.now() - 10_000;
+    return lines.filter((l) => l.receivedAt >= cutoff).length / 10;
+  }, [lines]);
+
+  // Simple windowed rendering (nowrap) — only rows near the viewport mount.
+  const start = wrap ? 0 : Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - 20);
+  const end = wrap ? visible.length : Math.min(visible.length, Math.ceil((scrollTop + viewHeight) / ROW_HEIGHT) + 20);
+  const currentMatch = matches.length ? matches[cursor] : undefined;
+  const showPod = tab.pods.length > 1;
 
   return (
-    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1, py: 0.5, borderBottom: 1, borderColor: 'divider', flexShrink: 0 }}>
-        <TextField placeholder="Filter (regex)…" value={filter} onChange={(e) => setFilter(e.target.value)} sx={{ width: 240 }} />
-        <Chip label={`${visible.length} lines`} variant="outlined" />
+    <Box
+      sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}
+      onKeyDown={(e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+          e.preventDefault();
+          findRef.current?.focus();
+          findRef.current?.select();
+        }
+      }}
+    >
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1, py: 0.5, borderBottom: 1, borderColor: 'divider', flexShrink: 0, flexWrap: 'wrap' }}>
+        <Select size="small" value={timeMode} onChange={(e) => setTimeMode(e.target.value as LogTimeMode)} sx={{ width: 124 }}>
+          {TIME_OPTIONS.map((opt) => (
+            <MenuItem key={opt.value} value={opt.value}>
+              {opt.label}
+            </MenuItem>
+          ))}
+        </Select>
+        <TextField placeholder="Filter (regex)…" value={filter} onChange={(e) => setFilter(e.target.value)} sx={{ width: 200 }} />
+        <TextField
+          placeholder="Find…"
+          inputRef={findRef}
+          value={find}
+          onChange={(e) => {
+            setFind(e.target.value);
+            setCursor(0);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              findStep(e.shiftKey ? -1 : 1);
+            }
+          }}
+          sx={{ width: 170 }}
+        />
+        {find && (
+          <>
+            <Typography variant="caption" color="text.secondary" sx={{ minWidth: 48, textAlign: 'center' }}>
+              {matches.length ? `${cursor + 1} / ${matches.length}` : '0 / 0'}
+            </Typography>
+            <IconButton size="small" disabled={!matches.length} onClick={() => findStep(-1)}>
+              <KeyboardArrowUpIcon fontSize="small" />
+            </IconButton>
+            <IconButton size="small" disabled={!matches.length} onClick={() => findStep(1)}>
+              <KeyboardArrowDownIcon fontSize="small" />
+            </IconButton>
+          </>
+        )}
+        <Chip label={`${visible.length}/${lines.length} lines`} variant="outlined" />
+        <Chip label={`${recentRate >= 10 ? recentRate.toFixed(0) : recentRate.toFixed(1)}/s`} variant="outlined" />
         <Typography variant="caption" color="text.secondary">
           {statusText}
         </Typography>
         <Box sx={{ flex: 1 }} />
+        <Tooltip title={highlight ? 'Disable syntax highlighting' : 'Enable syntax highlighting (ANSI / JSON / logfmt)'}>
+          <ToggleButton value="highlight" selected={highlight} size="small" onChange={() => setHighlight(!highlight)} sx={{ p: 0.5, fontSize: 12, lineHeight: 1, width: 28 }}>
+            Aa
+          </ToggleButton>
+        </Tooltip>
+        <Tooltip title={wrap ? 'Disable line wrap' : 'Wrap long lines'}>
+          <ToggleButton value="wrap" selected={wrap} size="small" onChange={() => setWrap(!wrap)} sx={{ p: 0.5 }}>
+            <WrapTextIcon fontSize="small" />
+          </ToggleButton>
+        </Tooltip>
+        <Tooltip title={`Timestamps: ${tsMode}`}>
+          <ToggleButton value="ts" selected={tsMode !== 'off'} size="small" onChange={cycleTsMode} sx={{ p: 0.5 }}>
+            <AccessTimeIcon fontSize="small" />
+          </ToggleButton>
+        </Tooltip>
         <Tooltip title={follow ? 'Pause auto-scroll' : 'Resume auto-scroll'}>
           <ToggleButton value="follow" selected={follow} size="small" onChange={() => setFollow(!follow)} sx={{ p: 0.5 }}>
             {follow ? <PauseIcon fontSize="small" /> : <PlayArrowIcon fontSize="small" />}
@@ -144,29 +340,38 @@ export function LogViewer({ tab }: { tab: LogsTab }) {
             <DownloadIcon fontSize="small" />
           </IconButton>
         </Tooltip>
+        <Tooltip title="Copy visible logs">
+          <IconButton size="small" onClick={() => void copyVisible()}>
+            <ContentCopyIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title={maximized ? 'Exit full screen' : 'Full screen'}>
+          <IconButton size="small" onClick={() => setMaximized(!maximized)}>
+            {maximized ? <FullscreenExitIcon fontSize="small" /> : <FullscreenIcon fontSize="small" />}
+          </IconButton>
+        </Tooltip>
       </Box>
       <Box
         ref={scrollRef}
         onScroll={onScroll}
         sx={{ flex: 1, overflow: 'auto', fontFamily: '"JetBrains Mono", monospace', fontSize: 12, bgcolor: '#151518', color: '#d4d4da' }}
       >
-        <Box sx={{ height: visible.length * ROW_HEIGHT, position: 'relative' }}>
+        <Box sx={wrap ? undefined : { height: visible.length * ROW_HEIGHT, position: 'relative' }}>
           {visible.slice(start, end).map((l, i) => {
             const idx = start + i;
             return (
-              <Box
+              <LineRow
                 key={idx}
-                sx={{ position: 'absolute', top: idx * ROW_HEIGHT, left: 0, right: 0, height: ROW_HEIGHT, px: 1, whiteSpace: 'pre', display: 'flex', gap: 1, '&:hover': { bgcolor: 'rgba(255,255,255,0.04)' } }}
-              >
-                {tab.pods.length > 1 && (
-                  <Box component="span" sx={{ color: podColor.get(l.pod) ?? '#888', flexShrink: 0 }}>
-                    {l.pod}
-                  </Box>
-                )}
-                <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {l.line}
-                </Box>
-              </Box>
+                line={l}
+                idx={idx}
+                wrap={wrap}
+                showPod={showPod}
+                podColor={showPod ? (podColor.get(l.pod) ?? '#888') : undefined}
+                tsMode={tsMode}
+                highlight={highlight}
+                find={find}
+                isCurrent={idx === currentMatch}
+              />
             );
           })}
         </Box>
@@ -174,3 +379,59 @@ export function LogViewer({ tab }: { tab: LogsTab }) {
     </Box>
   );
 }
+
+interface LineRowProps {
+  line: LogLine;
+  idx: number;
+  wrap: boolean;
+  showPod: boolean;
+  podColor?: string;
+  tsMode: TsMode;
+  highlight: boolean;
+  find: string;
+  isCurrent: boolean;
+}
+
+const LineRow = memo(function LineRow({ line, idx, wrap, showPod, podColor, tsMode, highlight, find, isCurrent }: LineRowProps) {
+  const segs = highlight ? segsOf(line) : [{ text: strippedOf(line) }];
+  const marked = find ? markSegs(segs, find) : segs;
+  return (
+    <Box
+      data-idx={idx}
+      sx={
+        wrap
+          ? { px: 1, whiteSpace: 'pre-wrap', wordBreak: 'break-all', contentVisibility: 'auto', containIntrinsicSize: `auto ${ROW_HEIGHT}px`, '&:hover': { bgcolor: 'rgba(255,255,255,0.04)' } }
+          : { position: 'absolute', top: idx * ROW_HEIGHT, left: 0, right: 0, height: ROW_HEIGHT, px: 1, whiteSpace: 'pre', display: 'flex', gap: 1, '&:hover': { bgcolor: 'rgba(255,255,255,0.04)' } }
+      }
+    >
+      {showPod && (
+        <Box component="span" sx={{ color: podColor, flexShrink: 0, ...(wrap ? { mr: 1 } : {}) }}>
+          {line.pod}
+        </Box>
+      )}
+      {tsMode !== 'off' && (
+        <Box component="span" sx={{ color: '#6b7089', flexShrink: 0, minWidth: '12ch', ...(wrap ? { mr: 1 } : {}) }}>
+          {line.ts ? fmtTs(line.ts, tsMode) : ''}
+        </Box>
+      )}
+      <Box component="span" sx={wrap ? undefined : { overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        {marked.map((seg, i) => {
+          const mark = 'mark' in seg && seg.mark;
+          return (
+            <span
+              key={i}
+              style={{
+                color: mark && isCurrent ? '#1a1a1e' : (seg.fg ?? (seg.cls ? CLS_COLORS[seg.cls] : undefined)),
+                backgroundColor: mark ? (isCurrent ? '#e0af68' : 'rgba(224,175,104,0.35)') : seg.bg,
+                fontWeight: seg.bold ? 700 : undefined,
+                opacity: seg.dim ? 0.6 : undefined,
+              }}
+            >
+              {seg.text}
+            </span>
+          );
+        })}
+      </Box>
+    </Box>
+  );
+});

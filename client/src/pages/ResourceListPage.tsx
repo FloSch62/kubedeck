@@ -1,16 +1,17 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Box, Button, Dialog, DialogContent, DialogTitle, Typography } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import SubjectIcon from '@mui/icons-material/Subject';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
 import { useParams, useSearchParams } from 'react-router';
 import { columnsForKind, groupFromPath, type ResourceKindInfo } from '@kubedeck/shared';
-import { useApiResources, useCreateResource, useFilteredList, useResourceMetrics, type ClusterRow } from '../api/queries.js';
+import { useApiResourcesForContexts, useCreateResource, useFilteredList, useResourceMetrics, type ClusterRow } from '../api/queries.js';
 import { useClustersStore } from '../state/clusters.js';
 import { useDockStore, dockTabId } from '../state/dock.js';
 import { ResourceTable } from '../components/ResourceTable.js';
 import { buildColumns, makeMetricsLookup } from '../components/columns.js';
-import { ResourceDetailDrawer, type ResourceSelection } from '../components/ResourceDetailDrawer.js';
+import type { ResourceSelection } from '../components/ResourceDetailDrawer.js';
+import { useDetailStore } from '../state/detail.js';
 import { RowActions } from '../components/RowActions.js';
 import { YamlEditor } from '../components/YamlEditor.js';
 import { EmptyState } from '../components/EmptyState.js';
@@ -22,9 +23,9 @@ export function ResourceListPage() {
   const plural = params.plural ?? 'pods';
 
   const selected = useClustersStore((s) => s.selected);
-  const { data: apiResources } = useApiResources(selected[0]);
+  const { data: apiResources } = useApiResourcesForContexts(selected);
   const kindInfo: ResourceKindInfo | undefined = useMemo(
-    () => apiResources?.find((r) => r.group === group && r.version === version && r.plural === plural),
+    () => apiResources?.resources.find((r) => r.group === group && r.version === version && r.plural === plural),
     [apiResources, group, version, plural],
   );
   const kind = kindInfo?.kind ?? plural;
@@ -50,6 +51,24 @@ export function ResourceListPage() {
     return { ctx, group, version, plural, kind, name, namespace: namespace || undefined };
   }, [searchParams, group, version, plural, kind]);
 
+  // Mirror the URL selection into the global detail drawer; close on unmount.
+  const openDetail = useDetailStore((s) => s.open);
+  const closeDetail = useDetailStore((s) => s.close);
+  const detailOpen = useDetailStore((s) => s.stack.length > 0);
+  useEffect(() => {
+    if (sel) openDetail(sel);
+    else closeDetail();
+  }, [sel, openDetail, closeDetail]);
+  useEffect(() => () => closeDetail(), [closeDetail]);
+  // Drawer closed via its X → drop the ?sel deep link. The ref guards
+  // against clearing on mount, before the mirror effect has opened it.
+  const wasDetailOpen = useRef(false);
+  useEffect(() => {
+    if (wasDetailOpen.current && !detailOpen && searchParams.get('sel')) setSearchParams({});
+    wasDetailOpen.current = detailOpen;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detailOpen]);
+
   const columns = useMemo(() => {
     const ids = columnsForKind(kind, namespaced);
     const cols = buildColumns(ids, { multiCluster: selected.length > 1, metrics: makeMetricsLookup(kind, podMetrics) });
@@ -64,6 +83,17 @@ export function ResourceListPage() {
     return cols;
   }, [kind, namespaced, selected.length, podMetrics, group, version, plural]);
 
+  const supportsGvr = (r: ResourceKindInfo) => r.group === group && r.version === version && r.plural === plural;
+  const discoveryMissing = useMemo(() => {
+    if (!apiResources) return [];
+    return selected.filter((ctx) => {
+      if (apiResources.errors[ctx]) return false;
+      return !(apiResources.byContext[ctx] ?? []).some(supportsGvr);
+    });
+  }, [apiResources, selected, group, version, plural]);
+  const unavailable = Object.entries(list.status).filter(([, s]) => s.state === 'unavailable');
+  const unavailableContexts = new Set(unavailable.map(([ctx]) => ctx));
+  const discoveryOnlyMissing = discoveryMissing.filter((ctx) => !unavailableContexts.has(ctx));
   const errors = Object.entries(list.status).filter(([, s]) => s.state === 'error');
 
   if (selected.length === 0) {
@@ -87,6 +117,16 @@ export function ResourceListPage() {
             {ctx}: {s.message ?? 'watch error'}
           </Alert>
         ))}
+        {unavailable.map(([ctx, s]) => (
+          <Alert key={ctx} severity="info" sx={{ mt: 0.5 }}>
+            {ctx}: {s.message ?? `${kind} is not installed on this cluster.`}
+          </Alert>
+        ))}
+        {discoveryOnlyMissing.length > 0 && (
+          <Alert severity="info" sx={{ mt: 0.5 }}>
+            {kind} is not installed in {discoveryOnlyMissing.join(', ')}.
+          </Alert>
+        )}
         {metricsUnavailable.length > 0 && (
           <Alert severity="info" sx={{ mt: 0.5 }}>
             CPU/Memory unavailable — metrics-server is not reachable in {metricsUnavailable.join(', ')}.
@@ -122,6 +162,8 @@ export function ResourceListPage() {
                       ctx: ctx!,
                       namespace: namespace ?? '',
                       pods: rows.map((r) => r.obj.metadata.name),
+                      follow: true,
+                      tailLines: 500,
                     });
                   }
                 }}
@@ -135,7 +177,6 @@ export function ResourceListPage() {
           </>
         }
       />
-      <ResourceDetailDrawer sel={sel} onClose={() => setSearchParams({})} />
       <Dialog open={createOpen} onClose={() => setCreateOpen(false)} maxWidth="md" fullWidth slotProps={{ paper: { sx: { height: '80vh' } } }}>
         <DialogTitle>Create resource{selected.length > 1 ? ` on ${selected[0]}` : ''}</DialogTitle>
         <DialogContent sx={{ p: 0, display: 'flex', flexDirection: 'column' }}>

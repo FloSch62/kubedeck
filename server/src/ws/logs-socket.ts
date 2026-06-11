@@ -8,7 +8,7 @@ import { podContainers } from '../kube/actions.js';
 /**
  * One socket per log session. Query params:
  *   ctx, namespace, pods (comma-separated), container ('' = all containers),
- *   follow, tailLines, previous, timestamps are parsed per session.
+ *   follow, tailLines, sinceSeconds, previous, timestamps are parsed per session.
  * The server fans IN multiple pod/container streams and forwards each line
  * as a JSON frame tagged with its origin.
  */
@@ -20,7 +20,8 @@ export function registerLogsSocket(app: FastifyInstance, ctx: AppContext): void 
     const pods = (q.pods ?? '').split(',').filter(Boolean);
     const container = q.container || undefined;
     const follow = q.follow !== 'false';
-    const tailLines = q.tailLines ? Number(q.tailLines) : 200;
+    const tailLines = q.tailLines !== undefined ? Number(q.tailLines) : undefined;
+    const sinceSeconds = q.sinceSeconds ? Number(q.sinceSeconds) : undefined;
     const previous = q.previous === 'true';
 
     const send = (msg: LogServerMessage) => {
@@ -61,7 +62,8 @@ export function registerLogsSocket(app: FastifyInstance, ctx: AppContext): void 
         send({ op: 'pod-status', pod, container: containerName, state: 'streaming' });
         const abort = await handle.makeLog().log(namespace, pod, containerName, sink, {
           follow,
-          tailLines: Number.isFinite(tailLines) ? tailLines : 200,
+          tailLines: tailLines !== undefined && Number.isFinite(tailLines) ? tailLines : undefined,
+          sinceSeconds: sinceSeconds !== undefined && Number.isFinite(sinceSeconds) ? sinceSeconds : undefined,
           previous,
           timestamps: true,
         });

@@ -124,6 +124,19 @@ export function podContainerNames(pod: KubeObject): string[] {
   return [...(spec?.containers ?? []), ...(spec?.initContainers ?? [])].map((c) => c.name);
 }
 
+const QUANTITY_BINARY: Record<string, number> = { Ki: 2 ** 10, Mi: 2 ** 20, Gi: 2 ** 30, Ti: 2 ** 40, Pi: 2 ** 50, Ei: 2 ** 60 };
+const QUANTITY_DECIMAL: Record<string, number> = { n: 1e-9, u: 1e-6, m: 1e-3, '': 1, k: 1e3, M: 1e6, G: 1e9, T: 1e12, P: 1e15, E: 1e18 };
+
+/** Parse a Kubernetes quantity ("500m", "1Gi", "128974848") to base units. */
+export function parseQuantity(q: string | undefined): number {
+  if (!q) return 0;
+  const m = /^([+-]?[0-9.eE+-]+?)(Ki|Mi|Gi|Ti|Pi|Ei|n|u|m|k|M|G|T|P|E)?$/.exec(q.trim());
+  if (!m) return 0;
+  const value = Number(m[1]);
+  if (Number.isNaN(value)) return 0;
+  return value * (QUANTITY_BINARY[m[2] ?? ''] ?? QUANTITY_DECIMAL[m[2] ?? ''] ?? 1);
+}
+
 /** Strip noisy fields for diff/display normalization. */
 export function normalizeForDiff(obj: KubeObject): KubeObject {
   const clone = JSON.parse(JSON.stringify(obj)) as KubeObject;

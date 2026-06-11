@@ -10,6 +10,7 @@ import { PortForwardManager } from './kube/portforward-manager.js';
 import { registerContextRoutes } from './routes/contexts.js';
 import { registerResourceRoutes } from './routes/resources.js';
 import { registerActionRoutes } from './routes/actions.js';
+import { registerDetailRoutes } from './routes/detail.js';
 import { registerMetricsRoutes } from './routes/metrics.js';
 import { registerHelmRoutes } from './routes/helm.js';
 import { registerPortForwardRoutes } from './routes/portforward.js';
@@ -73,6 +74,7 @@ export async function buildApp(config: ServerConfig): Promise<{ app: FastifyInst
   registerContextRoutes(app, ctx);
   registerResourceRoutes(app, ctx);
   registerActionRoutes(app, ctx);
+  registerDetailRoutes(app, ctx);
   registerMetricsRoutes(app, ctx);
   registerHelmRoutes(app, ctx);
   registerPortForwardRoutes(app, ctx);

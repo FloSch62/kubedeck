@@ -1,6 +1,9 @@
+import { useEffect } from 'react';
 import { Box, IconButton, Tab, Tabs, Tooltip } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
+import FullscreenIcon from '@mui/icons-material/Fullscreen';
+import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
 import TerminalIcon from '@mui/icons-material/Terminal';
 import SubjectIcon from '@mui/icons-material/Subject';
 import { useDockStore } from '../state/dock.js';
@@ -8,7 +11,17 @@ import { TerminalPane } from '../components/TerminalPane.js';
 import { LogViewer } from '../components/LogViewer.js';
 
 export function BottomDock() {
-  const { tabs, activeId, open, setActive, closeTab, setOpen, height, setHeight } = useDockStore();
+  const { tabs, activeId, open, setActive, closeTab, setOpen, height, setHeight, maximized, setMaximized } = useDockStore();
+
+  useEffect(() => {
+    if (!maximized) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMaximized(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [maximized, setMaximized]);
+
   if (!open || tabs.length === 0) return null;
 
   const startResize = (e: React.MouseEvent) => {
@@ -26,20 +39,22 @@ export function BottomDock() {
 
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', borderTop: 1, borderColor: 'divider', bgcolor: 'background.paper' }}>
-      <Box
-        onMouseDown={startResize}
-        sx={{
-          height: 6,
-          cursor: 'row-resize',
-          flexShrink: 0,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          '&:hover .grip, &:active .grip': { bgcolor: 'primary.main', width: 56 },
-        }}
-      >
-        <Box className="grip" sx={{ width: 36, height: 3, borderRadius: 2, bgcolor: 'divider', transition: 'all 120ms ease' }} />
-      </Box>
+      {!maximized && (
+        <Box
+          onMouseDown={startResize}
+          sx={{
+            height: 6,
+            cursor: 'row-resize',
+            flexShrink: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            '&:hover .grip, &:active .grip': { bgcolor: 'primary.main', width: 56 },
+          }}
+        >
+          <Box className="grip" sx={{ width: 36, height: 3, borderRadius: 2, bgcolor: 'divider', transition: 'all 120ms ease' }} />
+        </Box>
+      )}
       <Box sx={{ display: 'flex', alignItems: 'center', borderBottom: 1, borderColor: 'divider', flexShrink: 0 }}>
         <Tabs value={activeId ?? false} onChange={(_e, v) => setActive(v as string)} variant="scrollable" sx={{ minHeight: 32, flex: 1 }}>
           {tabs.map((tab) => (
@@ -67,6 +82,11 @@ export function BottomDock() {
             />
           ))}
         </Tabs>
+        <Tooltip title={maximized ? 'Restore' : 'Maximize'}>
+          <IconButton size="small" onClick={() => setMaximized(!maximized)}>
+            {maximized ? <FullscreenExitIcon fontSize="small" /> : <FullscreenIcon fontSize="small" />}
+          </IconButton>
+        </Tooltip>
         <Tooltip title="Minimize">
           <IconButton size="small" onClick={() => setOpen(false)}>
             <KeyboardArrowDownIcon fontSize="small" />

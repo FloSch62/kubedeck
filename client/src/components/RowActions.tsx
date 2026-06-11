@@ -7,12 +7,15 @@ import {
   DialogContent,
   DialogTitle,
   Divider,
+  FormControl,
   IconButton,
+  InputLabel,
   LinearProgress,
   ListItemIcon,
   ListItemText,
   Menu,
   MenuItem,
+  Select,
   Snackbar,
   TextField,
   Typography,
@@ -25,10 +28,25 @@ import CableIcon from '@mui/icons-material/Cable';
 import OpenInFullIcon from '@mui/icons-material/OpenInFull';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import PauseCircleOutlineIcon from '@mui/icons-material/PauseCircleOutline';
+import PlayCircleOutlineIcon from '@mui/icons-material/PlayCircleOutline';
+import LayersIcon from '@mui/icons-material/Layers';
 import BlockIcon from '@mui/icons-material/Block';
 import DownhillSkiingIcon from '@mui/icons-material/DownhillSkiing';
-import type { KubeObject } from '@kubedeck/shared';
-import { useCordon, useDeleteResource, useDrain, useRolloutRestart, useScale, useStartPortForward, useTriggerCronJob } from '../api/queries.js';
+import type { KubeObject, LogTargetKind } from '@kubedeck/shared';
+import {
+  resolveLogTargetPods,
+  useCordon,
+  useDeleteResource,
+  useDrain,
+  useResourceList,
+  useRolloutRestart,
+  useScale,
+  useSetImage,
+  useStartPortForward,
+  useSuspendCronJob,
+  useTriggerCronJob,
+} from '../api/queries.js';
 import { watchClient } from '../api/ws/watch-client.js';
 import { useDockStore, dockTabId } from '../state/dock.js';
 import { ConfirmDialog } from './ConfirmDialog.js';
@@ -43,15 +61,23 @@ export interface RowActionTarget {
   obj: KubeObject;
 }
 
+const LOG_TARGET_KINDS = new Set<string>(['Pod', 'Deployment', 'ReplicaSet', 'StatefulSet', 'DaemonSet', 'Service']);
+
+function isLogTargetKind(kind: string): kind is LogTargetKind {
+  return LOG_TARGET_KINDS.has(kind);
+}
+
 export function RowActions({ target }: { target: RowActionTarget }) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
-  const [dialog, setDialog] = useState<'delete' | 'scale' | 'forward' | 'drain' | null>(null);
+  const [dialog, setDialog] = useState<'delete' | 'scale' | 'forward' | 'drain' | 'restart-rs' | 'set-image' | null>(null);
   const [toast, setToast] = useState<{ severity: 'success' | 'error'; text: string } | null>(null);
+  const [logsBusy, setLogsBusy] = useState(false);
 
   const del = useDeleteResource();
   const restart = useRolloutRestart();
   const cordon = useCordon();
   const trigger = useTriggerCronJob();
+  const suspendCj = useSuspendCronJob();
   const addTab = useDockStore((s) => s.addTab);
 
   const { kind, obj, ctx } = target;
@@ -64,11 +90,45 @@ export function RowActions({ target }: { target: RowActionTarget }) {
 
   const scalable = kind === 'Deployment' || kind === 'StatefulSet' || kind === 'ReplicaSet';
   const restartable = kind === 'Deployment' || kind === 'StatefulSet' || kind === 'DaemonSet';
+  const isReplicaSet = kind === 'ReplicaSet';
   const isPod = kind === 'Pod';
   const isNode = kind === 'Node';
   const isCronJob = kind === 'CronJob';
   const canForward = isPod || kind === 'Service';
+  const canViewLogs = isLogTargetKind(kind);
   const unschedulable = isNode && !!(obj.spec as { unschedulable?: boolean })?.unschedulable;
+  const cjSuspended = isCronJob && !!(obj.spec as { suspend?: boolean })?.suspend;
+
+  const openLogs = async () => {
+    if (!isLogTargetKind(kind)) return;
+    if (!namespace) {
+      fail(new Error(`${kind} has no namespace`));
+      return;
+    }
+    setLogsBusy(true);
+    try {
+      const { pods } = await resolveLogTargetPods({ ctx, group: target.group, version: target.version, plural: target.plural, kind, namespace, name });
+      if (!pods.length) throw new Error(`No pods found for ${kind} ${namespace}/${name}`);
+      const byNamespace = new Map<string, string[]>();
+      for (const pod of pods) byNamespace.set(pod.namespace, [...(byNamespace.get(pod.namespace) ?? []), pod.name]);
+      for (const [ns, podNames] of byNamespace) {
+        addTab({
+          kind: 'logs',
+          id: dockTabId(),
+          title: pods.length === 1 ? `logs: ${podNames[0] ?? name}` : `logs: ${kind}/${name}`,
+          ctx,
+          namespace: ns,
+          pods: podNames,
+          follow: true,
+          tailLines: 500,
+        });
+      }
+    } catch (err) {
+      fail(err);
+    } finally {
+      setLogsBusy(false);
+    }
+  };
 
   return (
     <>
@@ -82,12 +142,13 @@ export function RowActions({ target }: { target: RowActionTarget }) {
         <MoreVertIcon fontSize="small" />
       </IconButton>
       <Menu anchorEl={anchor} open={!!anchor} onClose={close} onClick={(e) => e.stopPropagation()}>
-        {isPod && (
+        {canViewLogs && (
           <MenuItem
             onClick={() => {
-              addTab({ kind: 'logs', id: dockTabId(), title: `logs: ${name}`, ctx, namespace: namespace ?? '', pods: [name] });
+              void openLogs();
               close();
             }}
+            disabled={logsBusy}
           >
             <ListItemIcon>
               <SubjectIcon fontSize="small" />
@@ -151,6 +212,32 @@ export function RowActions({ target }: { target: RowActionTarget }) {
             <ListItemText>Rollout restart</ListItemText>
           </MenuItem>
         )}
+        {isReplicaSet && (
+          <MenuItem
+            onClick={() => {
+              setDialog('restart-rs');
+              close();
+            }}
+          >
+            <ListItemIcon>
+              <RestartAltIcon fontSize="small" />
+            </ListItemIcon>
+            <ListItemText>Restart pods…</ListItemText>
+          </MenuItem>
+        )}
+        {restartable && (
+          <MenuItem
+            onClick={() => {
+              setDialog('set-image');
+              close();
+            }}
+          >
+            <ListItemIcon>
+              <LayersIcon fontSize="small" />
+            </ListItemIcon>
+            <ListItemText>Set image…</ListItemText>
+          </MenuItem>
+        )}
         {isCronJob && (
           <MenuItem
             onClick={() => {
@@ -162,6 +249,20 @@ export function RowActions({ target }: { target: RowActionTarget }) {
               <PlayArrowIcon fontSize="small" />
             </ListItemIcon>
             <ListItemText>Trigger now</ListItemText>
+          </MenuItem>
+        )}
+        {isCronJob && (
+          <MenuItem
+            onClick={() => {
+              suspendCj.mutate(
+                { ctx, body: { namespace: namespace ?? '', name, suspend: !cjSuspended } },
+                { onSuccess: () => ok(`${cjSuspended ? 'Resumed' : 'Suspended'} ${name}`), onError: fail },
+              );
+              close();
+            }}
+          >
+            <ListItemIcon>{cjSuspended ? <PlayCircleOutlineIcon fontSize="small" /> : <PauseCircleOutlineIcon fontSize="small" />}</ListItemIcon>
+            <ListItemText>{cjSuspended ? 'Resume' : 'Suspend'}</ListItemText>
           </MenuItem>
         )}
         {isNode && (
@@ -236,7 +337,41 @@ export function RowActions({ target }: { target: RowActionTarget }) {
           )
         }
       />
+      <ConfirmDialog
+        open={dialog === 'restart-rs'}
+        title="Restart ReplicaSet pods"
+        message={
+          <>
+            This deletes all pods of <b>{namespace ? `${namespace}/` : ''}{name}</b> at once; the ReplicaSet recreates them. Expect brief downtime.
+            {(obj.metadata.ownerReferences ?? []).some((o) => o.kind === 'Deployment' && o.controller) && (
+              <>
+                {' '}This ReplicaSet is managed by a Deployment — consider restarting the Deployment instead for a rolling restart.
+              </>
+            )}
+          </>
+        }
+        confirmLabel="Restart"
+        danger
+        busy={restart.isPending}
+        onClose={() => setDialog(null)}
+        onConfirm={() =>
+          restart.mutate(
+            { ctx, body: { kind: 'ReplicaSet', namespace: namespace ?? '', name } },
+            {
+              onSuccess: () => {
+                setDialog(null);
+                ok(`Restarting pods of ${name}`);
+              },
+              onError: (e) => {
+                setDialog(null);
+                fail(e);
+              },
+            },
+          )
+        }
+      />
       {dialog === 'scale' && <ScaleDialog target={target} onClose={() => setDialog(null)} onDone={ok} onError={fail} />}
+      {dialog === 'set-image' && <SetImageDialog target={target} onClose={() => setDialog(null)} onDone={ok} onError={fail} />}
       {dialog === 'forward' && <PortForwardDialog target={target} onClose={() => setDialog(null)} onDone={ok} onError={fail} />}
       {dialog === 'drain' && <DrainDialog target={target} onClose={() => setDialog(null)} />}
 
@@ -249,14 +384,39 @@ export function RowActions({ target }: { target: RowActionTarget }) {
   );
 }
 
+interface HpaSpec {
+  scaleTargetRef?: { kind?: string; name?: string };
+  minReplicas?: number;
+  maxReplicas?: number;
+}
+
 function ScaleDialog({ target, onClose, onDone, onError }: { target: RowActionTarget; onClose: () => void; onDone: (t: string) => void; onError: (e: unknown) => void }) {
   const scale = useScale();
   const current = (target.obj.spec as { replicas?: number })?.replicas ?? 0;
   const [replicas, setReplicas] = useState(current);
+  const { data: hpas } = useResourceList({
+    ctx: target.ctx,
+    group: 'autoscaling',
+    version: 'v2',
+    plural: 'horizontalpodautoscalers',
+    namespace: target.obj.metadata.namespace,
+  });
+  const hpa = hpas?.items.find((h) => {
+    const ref = (h.spec as HpaSpec)?.scaleTargetRef;
+    return ref?.kind === target.kind && ref?.name === target.obj.metadata.name;
+  });
+  const hpaSpec = hpa?.spec as HpaSpec | undefined;
+  const kedaName = hpa?.metadata.labels?.['scaledobject.keda.sh/name'];
   return (
     <Dialog open onClose={onClose} maxWidth="xs" fullWidth>
       <DialogTitle>Scale {target.obj.metadata.name}</DialogTitle>
       <DialogContent>
+        {hpa && (
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            HorizontalPodAutoscaler <b>{hpa.metadata.name}</b> targets this {target.kind} (min {hpaSpec?.minReplicas ?? 1} / max {hpaSpec?.maxReplicas ?? '?'})
+            {kedaName ? <>, managed by KEDA ScaledObject <b>{kedaName}</b></> : null}. Manual scaling will likely be reverted by the autoscaler.
+          </Alert>
+        )}
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           Current replicas: {current}
         </Typography>
@@ -295,6 +455,85 @@ function ScaleDialog({ target, onClose, onDone, onError }: { target: RowActionTa
           }
         >
           Scale
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+interface PodTemplateContainer {
+  name: string;
+  image?: string;
+}
+
+function SetImageDialog({ target, onClose, onDone, onError }: { target: RowActionTarget; onClose: () => void; onDone: (t: string) => void; onError: (e: unknown) => void }) {
+  const setImage = useSetImage();
+  const podSpec = (target.obj.spec as { template?: { spec?: { containers?: PodTemplateContainer[]; initContainers?: PodTemplateContainer[] } } })?.template?.spec;
+  const containers = [
+    ...(podSpec?.containers ?? []).map((c) => ({ ...c, init: false })),
+    ...(podSpec?.initContainers ?? []).map((c) => ({ ...c, init: true })),
+  ];
+  const [selected, setSelected] = useState(containers[0]?.name ?? '');
+  const chosen = containers.find((c) => c.name === selected);
+  const [image, setImageValue] = useState(chosen?.image ?? '');
+  return (
+    <Dialog open onClose={onClose} maxWidth="sm" fullWidth>
+      <DialogTitle>Set image — {target.obj.metadata.name}</DialogTitle>
+      <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '12px !important' }}>
+        <FormControl size="small" fullWidth>
+          <InputLabel id="set-image-container">Container</InputLabel>
+          <Select
+            labelId="set-image-container"
+            label="Container"
+            value={selected}
+            onChange={(e) => {
+              const name = e.target.value;
+              setSelected(name);
+              setImageValue(containers.find((c) => c.name === name)?.image ?? '');
+            }}
+          >
+            {containers.map((c) => (
+              <MenuItem key={`${c.init ? 'i' : 'c'}:${c.name}`} value={c.name}>
+                {c.name}
+                {c.init ? ' (init)' : ''}
+              </MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+        <TextField autoFocus fullWidth label="Image" value={image} onChange={(e) => setImageValue(e.target.value)} helperText={chosen?.image ? `Current: ${chosen.image}` : undefined} />
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Cancel</Button>
+        <Button
+          variant="contained"
+          disabled={setImage.isPending || !image.trim() || !chosen}
+          onClick={() =>
+            setImage.mutate(
+              {
+                ctx: target.ctx,
+                body: {
+                  kind: target.kind as 'Deployment',
+                  namespace: target.obj.metadata.namespace ?? '',
+                  name: target.obj.metadata.name,
+                  container: selected,
+                  image: image.trim(),
+                  initContainer: chosen?.init || undefined,
+                },
+              },
+              {
+                onSuccess: () => {
+                  onClose();
+                  onDone(`Set ${selected} image to ${image.trim()}`);
+                },
+                onError: (e) => {
+                  onClose();
+                  onError(e);
+                },
+              },
+            )
+          }
+        >
+          Apply
         </Button>
       </DialogActions>
     </Dialog>

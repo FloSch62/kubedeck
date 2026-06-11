@@ -26,7 +26,7 @@ import AdminPanelSettingsOutlinedIcon from '@mui/icons-material/AdminPanelSettin
 import ExtensionOutlinedIcon from '@mui/icons-material/ExtensionOutlined';
 import { NavLink, useLocation } from 'react-router';
 import { BUILTIN_NAV_GROUPS, groupToPath, type ResourceKindInfo } from '@kubedeck/shared';
-import { useApiResources } from '../api/queries.js';
+import { useApiResourcesForContexts } from '../api/queries.js';
 import { useClustersStore } from '../state/clusters.js';
 
 const WIDTH = 228;
@@ -76,7 +76,7 @@ function GroupHeader({ title, icon, open, onClick }: { title: string; icon?: Rea
 
 export function NavDrawer() {
   const selected = useClustersStore((s) => s.selected);
-  const { data: apiResources } = useApiResources(selected[0]);
+  const { data: apiResources } = useApiResourcesForContexts(selected);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set(['Custom Resources']));
   const [filter, setFilter] = useState('');
 
@@ -89,7 +89,7 @@ export function NavDrawer() {
     });
 
   const customKinds = useMemo(() => {
-    const custom = (apiResources ?? []).filter((r) => r.custom && r.verbs.includes('list'));
+    const custom = (apiResources?.resources ?? []).filter((r) => r.custom && r.verbs.includes('list'));
     const byGroup = new Map<string, ResourceKindInfo[]>();
     for (const kind of custom) {
       const list = byGroup.get(kind.group) ?? [];

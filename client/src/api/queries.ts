@@ -7,16 +7,24 @@ import type {
   HelmReleaseSummary,
   HelmRevision,
   KubeObject,
+  LogTargetKind,
+  LogTargetPodsResponse,
   MetricsHistoryResponse,
   MetricsSnapshot,
   PortForwardInfo,
   PortForwardRequest,
   ResourceKindInfo,
+  WatchStatusState,
+  ListResponse,
+  PodEnvResponse,
+  SecretTlsResponse,
   ScaleRequest,
   RolloutRestartRequest,
   CordonRequest,
   DrainRequest,
   DrainStartedResponse,
+  SetImageRequest,
+  SuspendCronJobRequest,
   TriggerCronJobRequest,
 } from '@kubedeck/shared';
 import { groupToPath } from '@kubedeck/shared';
@@ -61,6 +69,57 @@ export function useApiResources(ctx: string | undefined) {
   });
 }
 
+export interface ApiResourcesForContexts {
+  resources: ResourceKindInfo[];
+  byContext: Record<string, ResourceKindInfo[]>;
+  errors: Record<string, string>;
+}
+
+function mergeResourceKinds(lists: ResourceKindInfo[][]): ResourceKindInfo[] {
+  const byKey = new Map<string, ResourceKindInfo>();
+  for (const kind of lists.flat()) {
+    const key = `${kind.group}/${kind.version}/${kind.plural}`;
+    const prev = byKey.get(key);
+    if (!prev) {
+      byKey.set(key, { ...kind, verbs: [...kind.verbs] });
+      continue;
+    }
+    byKey.set(key, {
+      ...prev,
+      kind: prev.kind || kind.kind,
+      namespaced: prev.namespaced || kind.namespaced,
+      verbs: [...new Set([...prev.verbs, ...kind.verbs])],
+      shortNames: [...new Set([...(prev.shortNames ?? []), ...(kind.shortNames ?? [])])],
+      categories: [...new Set([...(prev.categories ?? []), ...(kind.categories ?? [])])],
+      custom: prev.custom || kind.custom,
+    });
+  }
+  return [...byKey.values()].sort((a, b) => a.kind.localeCompare(b.kind) || a.group.localeCompare(b.group) || a.plural.localeCompare(b.plural));
+}
+
+export function useApiResourcesForContexts(contexts: string[]) {
+  return useQuery({
+    queryKey: ['api-resources-multi', contexts],
+    queryFn: async (): Promise<ApiResourcesForContexts> => {
+      const entries = await Promise.all(
+        contexts.map(async (ctx) => {
+          try {
+            const resources = await apiFetch<ResourceKindInfo[]>(`/api/contexts/${encodeURIComponent(ctx)}/api-resources`);
+            return [ctx, resources, undefined] as const;
+          } catch (err) {
+            return [ctx, [] as ResourceKindInfo[], err instanceof Error ? err.message : String(err)] as const;
+          }
+        }),
+      );
+      const byContext = Object.fromEntries(entries.map(([ctx, resources]) => [ctx, resources]));
+      const errors = Object.fromEntries(entries.filter(([, , err]) => !!err).map(([ctx, , err]) => [ctx, err!]));
+      return { resources: mergeResourceKinds(entries.map(([, resources]) => resources)), byContext, errors };
+    },
+    enabled: contexts.length > 0,
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
 export function useNamespaces(contexts: string[]) {
   return useQuery({
     queryKey: ['namespaces', contexts],
@@ -85,7 +144,7 @@ export interface ClusterRow {
 export interface WatchedListState {
   rows: ClusterRow[];
   /** Per-context connection status. */
-  status: Record<string, { state: 'live' | 'reconnecting' | 'error' | 'loading'; message?: string }>;
+  status: Record<string, { state: WatchStatusState | 'loading'; message?: string }>;
 }
 
 /**
@@ -176,6 +235,24 @@ export function useResource(sel: { ctx: string; group: string; version: string; 
   });
 }
 
+/** One-shot (non-watched) list of a resource kind, with optional selectors. */
+export function useResourceList(sel: { ctx: string; group: string; version: string; plural: string; namespace?: string; labelSelector?: string; fieldSelector?: string } | undefined) {
+  return useQuery({
+    queryKey: ['resource-list', sel],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (sel!.namespace) params.set('namespace', sel!.namespace);
+      if (sel!.labelSelector) params.set('labelSelector', sel!.labelSelector);
+      if (sel!.fieldSelector) params.set('fieldSelector', sel!.fieldSelector);
+      const q = params.toString();
+      const url = `/api/contexts/${encodeURIComponent(sel!.ctx)}/resources/${groupToPath(sel!.group)}/${sel!.version}/${sel!.plural}${q ? `?${q}` : ''}`;
+      return apiFetch<ListResponse>(url);
+    },
+    enabled: !!sel,
+    retry: false,
+  });
+}
+
 export function useResourceEvents(sel: { ctx: string; name: string; kind?: string; namespace?: string } | undefined) {
   return useQuery({
     queryKey: ['events', sel],
@@ -188,6 +265,53 @@ export function useResourceEvents(sel: { ctx: string; name: string; kind?: strin
     enabled: !!sel,
     refetchInterval: 15_000,
   });
+}
+
+// ---- Detail views ----
+
+export function usePodEnv(sel: { ctx: string; namespace: string; name: string; reveal?: boolean } | undefined) {
+  return useQuery({
+    queryKey: ['pod-env', sel],
+    queryFn: () => {
+      const params = new URLSearchParams({ namespace: sel!.namespace, name: sel!.name });
+      if (sel!.reveal) params.set('reveal', 'true');
+      return apiFetch<PodEnvResponse>(`/api/contexts/${encodeURIComponent(sel!.ctx)}/detail/pod-env?${params}`);
+    },
+    enabled: !!sel,
+    retry: false,
+  });
+}
+
+export function useSecretTls(sel: { ctx: string; namespace: string; name: string } | undefined) {
+  return useQuery({
+    queryKey: ['secret-tls', sel],
+    queryFn: () => {
+      const params = new URLSearchParams({ namespace: sel!.namespace, name: sel!.name });
+      return apiFetch<SecretTlsResponse>(`/api/contexts/${encodeURIComponent(sel!.ctx)}/detail/secret-tls?${params}`);
+    },
+    enabled: !!sel,
+    retry: false,
+  });
+}
+
+export async function resolveLogTargetPods(sel: {
+  ctx: string;
+  group: string;
+  version: string;
+  plural: string;
+  kind: LogTargetKind;
+  namespace: string;
+  name: string;
+}): Promise<LogTargetPodsResponse> {
+  const params = new URLSearchParams({
+    group: sel.group,
+    version: sel.version,
+    plural: sel.plural,
+    kind: sel.kind,
+    namespace: sel.namespace,
+    name: sel.name,
+  });
+  return apiFetch<LogTargetPodsResponse>(`/api/contexts/${encodeURIComponent(sel.ctx)}/detail/log-target-pods?${params}`);
 }
 
 // ---- Mutations ----
@@ -246,6 +370,12 @@ export function useDrain() {
 }
 export function useTriggerCronJob() {
   return useMutation({ mutationFn: actionMutation<TriggerCronJobRequest, { jobName: string }>('trigger-cronjob') });
+}
+export function useSuspendCronJob() {
+  return useMutation({ mutationFn: actionMutation<SuspendCronJobRequest>('suspend-cronjob') });
+}
+export function useSetImage() {
+  return useMutation({ mutationFn: actionMutation<SetImageRequest>('set-image') });
 }
 
 // ---- Metrics / overview ----

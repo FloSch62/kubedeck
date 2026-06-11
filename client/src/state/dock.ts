@@ -18,6 +18,9 @@ export interface LogsTab {
   namespace: string;
   pods: string[];
   container?: string;
+  follow?: boolean;
+  tailLines?: number;
+  sinceSeconds?: number;
   previous?: boolean;
 }
 
@@ -28,11 +31,13 @@ interface DockState {
   activeId?: string;
   open: boolean;
   height: number;
+  maximized: boolean;
   addTab: (tab: DockTab) => void;
   closeTab: (id: string) => void;
   setActive: (id: string) => void;
   setOpen: (open: boolean) => void;
   setHeight: (height: number) => void;
+  setMaximized: (maximized: boolean) => void;
 }
 
 let counter = 0;
@@ -45,6 +50,7 @@ export const useDockStore = create<DockState>((set) => ({
   activeId: undefined,
   open: false,
   height: 320,
+  maximized: false,
   addTab: (tab) => set((s) => ({ tabs: [...s.tabs, tab], activeId: tab.id, open: true })),
   closeTab: (id) =>
     set((s) => {
@@ -53,9 +59,11 @@ export const useDockStore = create<DockState>((set) => ({
         tabs,
         activeId: s.activeId === id ? tabs[tabs.length - 1]?.id : s.activeId,
         open: tabs.length > 0 ? s.open : false,
+        maximized: tabs.length > 0 ? s.maximized : false,
       };
     }),
   setActive: (id) => set({ activeId: id, open: true }),
-  setOpen: (open) => set({ open }),
+  setOpen: (open) => set(open ? { open } : { open, maximized: false }),
   setHeight: (height) => set({ height: Math.max(160, Math.min(window.innerHeight - 200, height)) }),
+  setMaximized: (maximized) => set({ maximized }),
 }));

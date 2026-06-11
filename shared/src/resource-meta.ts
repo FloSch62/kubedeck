@@ -115,6 +115,15 @@ export function columnsForKind(kind: string, namespaced: boolean): string[] {
   return KIND_COLUMNS[kind] ?? (namespaced ? GENERIC_COLUMNS : GENERIC_CLUSTER_COLUMNS);
 }
 
+/** Look up the GVK for a builtin kind (e.g. to navigate to a related resource). */
+export function gvkForKind(kind: string): GVK | undefined {
+  for (const group of BUILTIN_NAV_GROUPS) {
+    const found = group.kinds.find((k) => k.kind === kind);
+    if (found) return found;
+  }
+  return undefined;
+}
+
 /** Sentinel used in URLs/routes for the core API group. */
 export const CORE_GROUP_SENTINEL = 'core';
 
