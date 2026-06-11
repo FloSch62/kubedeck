@@ -182,6 +182,7 @@ export class ClusterManager extends EventEmitter {
   }
 
   listContexts(): ContextInfo[] {
+    const current = this.kc.getCurrentContext();
     return this.kc.getContexts().map((c) => {
       const handle = this.handles.get(c.name);
       const cluster = this.kc.getCluster(c.cluster);
@@ -191,6 +192,7 @@ export class ClusterManager extends EventEmitter {
         user: c.user,
         namespace: c.namespace ?? undefined,
         server: cluster?.server,
+        current: c.name === current,
         health: handle?.health ?? 'unknown',
         healthMessage: handle?.healthMessage,
         active: !!handle,

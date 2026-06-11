@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import type { GraphEdge, GraphNode, GraphNodeStatus, KubeObject, RelationshipGraph, ResourceRef } from '@kubedeck/shared';
+import type { GraphEdge, GraphNode, GraphNodeStatus, KubeObject, RelationshipGraph, ResourceKindInfo, ResourceRef } from '@kubedeck/shared';
 import type { AppContext } from '../app.js';
 import type { ClusterHandle } from '../kube/cluster-manager.js';
 import { resourcePath } from '../kube/raw-client.js';
@@ -34,6 +34,12 @@ const KINDS: KindSpec[] = [
 interface Item {
   spec: KindSpec;
   obj: KubeObject;
+}
+
+interface RelationHint {
+  path: string;
+  value: string;
+  selector?: Record<string, string>;
 }
 
 interface LabelSelector {
@@ -71,6 +77,7 @@ function nodeId(ctx: string, spec: KindSpec, obj: KubeObject): string {
 function statusFor(kind: string, obj: KubeObject): { status: GraphNodeStatus; reason?: string } {
   const st = obj.status ?? {};
   const sp = obj.spec ?? {};
+  const ready = ((st.conditions ?? []) as Array<{ type?: string; status?: string; reason?: string; message?: string }>).find((c) => c.type === 'Ready');
   if (kind === 'Pod') {
     const phase = st.phase as string | undefined;
     const statuses = (st.containerStatuses ?? []) as Array<{ restartCount?: number; state?: { waiting?: { reason?: string; message?: string } } }>;
@@ -105,11 +112,16 @@ function statusFor(kind: string, obj: KubeObject): { status: GraphNodeStatus; re
     if (phase) return { status: 'warning', reason: phase };
   }
   if (kind === 'Node') {
-    const ready = ((st.conditions ?? []) as Array<{ type?: string; status?: string }>).find((c) => c.type === 'Ready')?.status;
-    if (ready === 'True') return { status: 'success' };
-    if (ready === 'False') return { status: 'error', reason: 'NotReady' };
+    if (ready?.status === 'True') return { status: 'success' };
+    if (ready?.status === 'False') return { status: 'error', reason: ready.reason ?? 'NotReady' };
     return { status: 'unknown' };
   }
+  const operationalState = ((st.operationalState as string | undefined) ?? (st.state as string | undefined) ?? (st.phase as string | undefined))?.toLowerCase();
+  if (operationalState && ['up', 'ready', 'running', 'active', 'available', 'succeeded', 'synced'].includes(operationalState)) return { status: 'success' };
+  if (operationalState && ['down', 'failed', 'error', 'degraded', 'lost'].includes(operationalState)) return { status: 'error', reason: operationalState };
+  if (operationalState && ['pending', 'progressing', 'reconciling'].includes(operationalState)) return { status: 'warning', reason: operationalState };
+  if (ready?.status === 'True') return { status: 'success' };
+  if (ready?.status === 'False') return { status: 'warning', reason: ready.reason ?? ready.message ?? 'NotReady' };
   return { status: 'unknown' };
 }
 
@@ -127,6 +139,80 @@ function selectorMatches(selector: Record<string, string> | undefined, labels: R
   return entries.length > 0 && entries.every(([k, v]) => labels?.[k] === v);
 }
 
+const IGNORED_RELATION_TERMS = new Set([
+  'api',
+  'change',
+  'enabled',
+  'generation',
+  'health',
+  'kind',
+  'last',
+  'metadata',
+  'mode',
+  'name',
+  'namespace',
+  'operating',
+  'operational',
+  'protocol',
+  'reason',
+  'resource',
+  'score',
+  'spec',
+  'state',
+  'status',
+  'system',
+  'time',
+  'type',
+  'version',
+]);
+
+function tokens(input: string): string[] {
+  const spaced = input
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2');
+  return spaced
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+    .map((token) => (token.endsWith('ies') ? `${token.slice(0, -3)}y` : token.endsWith('s') && token.length > 3 ? token.slice(0, -1) : token))
+    .filter((token) => !IGNORED_RELATION_TERMS.has(token));
+}
+
+function parseEqualitySelector(value: string): Record<string, string> | undefined {
+  const out: Record<string, string> = {};
+  const parts = value.split(',').map((part) => part.trim()).filter(Boolean);
+  if (!parts.length) return undefined;
+  for (const part of parts) {
+    const eq = part.indexOf('=');
+    if (eq <= 0 || part.includes('!=')) return undefined;
+    const key = part.slice(0, eq).trim();
+    const val = part.slice(eq + 1).trim();
+    if (!key || !val) return undefined;
+    out[key] = val;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+function collectRelationHints(value: unknown, prefix = ''): RelationHint[] {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed || trimmed.length > 120 || /^https?:\/\//i.test(trimmed)) return [];
+    return [{ path: prefix, value: trimmed, selector: parseEqualitySelector(trimmed) }];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((item, i) => collectRelationHints(item, `${prefix}[${i}]`));
+  }
+  if (value && typeof value === 'object') {
+    return Object.entries(value as Record<string, unknown>).flatMap(([key, item]) => collectRelationHints(item, prefix ? `${prefix}.${key}` : key));
+  }
+  return [];
+}
+
+function hintLabel(path: string): string {
+  const parts = path.replace(/\[\d+\]/g, '').split('.').filter(Boolean);
+  return parts.slice(-2).join('.') || 'ref';
+}
+
 async function listKind(handle: ClusterHandle, spec: KindSpec, namespaces: Set<string> | undefined, warnings: string[]): Promise<Item[]> {
   try {
     const query = new URLSearchParams({ limit: '2000' });
@@ -137,6 +223,168 @@ async function listKind(handle: ClusterHandle, spec: KindSpec, namespaces: Set<s
   } catch (err) {
     warnings.push(`${spec.kind}: ${err instanceof Error ? err.message : String(err)}`);
     return [];
+  }
+}
+
+function sameGvr(a: KindSpec, b: KindSpec): boolean {
+  return a.group === b.group && a.version === b.version && a.plural === b.plural;
+}
+
+function versionScore(version: string): [number, number, number] {
+  const match = /^v(\d+)(?:(alpha|beta)(\d+))?$/.exec(version);
+  if (!match) return [0, 0, 0];
+  const stability = match[2] === 'alpha' ? 1 : match[2] === 'beta' ? 2 : 3;
+  return [stability, Number(match[1]), Number(match[3] ?? 0)];
+}
+
+function preferResourceVersion(candidate: ResourceKindInfo, current: ResourceKindInfo): ResourceKindInfo {
+  const a = versionScore(candidate.version);
+  const b = versionScore(current.version);
+  if (a[0] !== b[0]) return a[0] > b[0] ? candidate : current;
+  if (a[1] !== b[1]) return a[1] > b[1] ? candidate : current;
+  if (a[2] !== b[2]) return a[2] > b[2] ? candidate : current;
+  return candidate.version.localeCompare(current.version) > 0 ? candidate : current;
+}
+
+function dedupeResourceKinds(kinds: ResourceKindInfo[]): ResourceKindInfo[] {
+  const byKind = new Map<string, ResourceKindInfo>();
+  for (const kind of kinds) {
+    const key = `${kind.group}/${kind.plural}/${kind.kind}`;
+    const current = byKind.get(key);
+    byKind.set(key, current ? preferResourceVersion(kind, current) : kind);
+  }
+  return [...byKind.values()];
+}
+
+function focusKindSpec(query: FocusQuery): KindSpec | undefined {
+  if (query.focusGroup === undefined || !query.focusVersion || !query.focusPlural || !query.focusKind || !query.focusName) return undefined;
+  return {
+    group: query.focusGroup,
+    version: query.focusVersion,
+    plural: query.focusPlural,
+    kind: query.focusKind,
+    namespaced: !!query.focusNamespace,
+    layer: layerForDynamicKind(query.focusKind),
+  };
+}
+
+async function getFocusedItem(handle: ClusterHandle, spec: KindSpec, query: FocusQuery, warnings: string[]): Promise<Item[]> {
+  if (!query.focusName) return [];
+  try {
+    const obj = await handle.raw.json<KubeObject>(
+      resourcePath(spec.group, spec.version, spec.plural, {
+        namespace: spec.namespaced ? query.focusNamespace : undefined,
+        name: query.focusName,
+      }),
+    );
+    return [{ spec, obj }];
+  } catch (err) {
+    warnings.push(`${spec.kind}: ${err instanceof Error ? err.message : String(err)}`);
+    return [];
+  }
+}
+
+function resourceKindToSpec(kind: ResourceKindInfo): KindSpec {
+  return {
+    group: kind.group,
+    version: kind.version,
+    plural: kind.plural,
+    kind: kind.kind,
+    namespaced: kind.namespaced,
+    layer: layerForDynamicKind(kind.kind),
+  };
+}
+
+function layerForDynamicKind(kind: string): GraphNode['layer'] {
+  const k = kind.toLowerCase();
+  if (k.includes('node')) return 'node';
+  if (k.includes('pool') || k.includes('secret') || k.includes('config')) return 'storage';
+  if (k.includes('link') || k.includes('interface') || k.includes('route') || k.includes('router') || k.includes('fabric') || k.includes('topology')) return 'route';
+  if (k.includes('deployment') || k.includes('workload')) return 'workload';
+  if (k.endsWith('state') || k.includes('monitor')) return 'operator';
+  return 'other';
+}
+
+function scoreCandidateKind(kind: ResourceKindInfo, focusSpec: KindSpec, hints: RelationHint[]): number {
+  if (!kind.verbs.includes('list') || sameGvr(resourceKindToSpec(kind), focusSpec)) return 0;
+  const hintTerms = new Set(hints.flatMap((hint) => tokens(hint.path)));
+  const kindTerms = tokens(`${kind.kind} ${kind.plural}`);
+  let score = kind.group === focusSpec.group ? 1 : 0;
+  for (const term of kindTerms) {
+    if (hintTerms.has(term)) score += 3;
+  }
+  if (kind.kind.includes(focusSpec.kind) || focusSpec.kind.includes(kind.kind)) score += 2;
+  return score;
+}
+
+function pickDynamicCandidateSpecs(kinds: ResourceKindInfo[], focusSpec: KindSpec, focusObj: KubeObject): KindSpec[] {
+  const hints = collectRelationHints({ spec: focusObj.spec, status: focusObj.status });
+  return dedupeResourceKinds(kinds)
+    .map((kind) => ({ kind, score: scoreCandidateKind(kind, focusSpec, hints) }))
+    .filter(({ score }) => score > 0)
+    .sort((a, b) => b.score - a.score || a.kind.kind.localeCompare(b.kind.kind))
+    .slice(0, 48)
+    .map(({ kind }) => resourceKindToSpec(kind));
+}
+
+async function listFocusedRelatedItems(handle: ClusterHandle, focus: Item, namespaces: Set<string> | undefined, warnings: string[]): Promise<Item[]> {
+  const resources = await handle.discovery.getResources();
+  const candidates = pickDynamicCandidateSpecs(resources.filter((kind) => kind.custom), focus.spec, focus.obj);
+  return (await Promise.all(candidates.map((spec) => listKind(handle, spec, namespaces, warnings)))).flat();
+}
+
+function metadataMentions(obj: KubeObject, name: string): boolean {
+  const values = [
+    ...Object.values(obj.metadata.labels ?? {}),
+    ...Object.values(obj.metadata.annotations ?? {}),
+  ];
+  return values.some((value) => value === name);
+}
+
+function addFocusedResourceEdges(edges: GraphEdge[], focus: Item | undefined, nodeItems: Map<string, Item>, nodes: Map<string, GraphNode>, byUid: Map<string, string>): void {
+  if (!focus) return;
+  const actualFocusId = [...nodeItems.entries()].find(([, item]) => sameGvr(item.spec, focus.spec) && item.obj.metadata.name === focus.obj.metadata.name && (item.obj.metadata.namespace ?? '') === (focus.obj.metadata.namespace ?? ''))?.[0];
+  if (!actualFocusId) return;
+  const focusHints = collectRelationHints({ spec: focus.obj.spec, status: focus.obj.status });
+  const focusLabelValues = Object.values(focus.obj.metadata.labels ?? {});
+  const focusAnnotationValues = Object.values(focus.obj.metadata.annotations ?? {});
+
+  for (const [id, item] of nodeItems) {
+    if (id === actualFocusId) continue;
+    const labels = item.obj.metadata.labels ?? {};
+    for (const hint of focusHints) {
+      if (hint.value === item.obj.metadata.name) {
+        addEdge(edges, actualFocusId, id, 'manages', hintLabel(hint.path));
+      }
+      if (hint.selector && selectorMatches(hint.selector, labels)) {
+        addEdge(edges, actualFocusId, id, 'selects', hintLabel(hint.path));
+      }
+    }
+
+    if (metadataMentions(item.obj, focus.obj.metadata.name)) {
+      addEdge(edges, actualFocusId, id, 'manages', 'metadata');
+    }
+
+    if (focusLabelValues.includes(item.obj.metadata.name) || focusAnnotationValues.includes(item.obj.metadata.name)) {
+      addEdge(edges, actualFocusId, id, 'manages', 'metadata');
+    }
+
+    const reverseHints = collectRelationHints({ spec: item.obj.spec, status: item.obj.status });
+    if (reverseHints.some((hint) => hint.value === focus.obj.metadata.name || (hint.selector && selectorMatches(hint.selector, focus.obj.metadata.labels)))) {
+      addEdge(edges, actualFocusId, id, 'manages', item.spec.kind);
+    }
+
+    for (const owner of item.obj.metadata.ownerReferences ?? []) {
+      if (owner.uid === focus.obj.metadata.uid) addEdge(edges, actualFocusId, id, 'owns', owner.kind);
+    }
+    for (const owner of focus.obj.metadata.ownerReferences ?? []) {
+      const ownerId = byUid.get(owner.uid);
+      if (ownerId) addEdge(edges, ownerId, actualFocusId, 'owns', owner.kind);
+    }
+  }
+
+  if (nodes.has(actualFocusId)) {
+    nodes.get(actualFocusId)!.layer = focus.spec.layer;
   }
 }
 
@@ -210,7 +458,11 @@ function focusGraph(graph: RelationshipGraph, query: FocusQuery): RelationshipGr
 async function buildGraph(handle: ClusterHandle, query: FocusQuery): Promise<RelationshipGraph> {
   const namespaces = query.namespace ? new Set(query.namespace.split(',').map((n) => n.trim()).filter(Boolean)) : undefined;
   const warnings: string[] = [];
-  const items = (await Promise.all(KINDS.map((spec) => listKind(handle, spec, namespaces, warnings)))).flat();
+  const focusSpec = focusKindSpec(query);
+  const listedItems = (await Promise.all(KINDS.map((spec) => listKind(handle, spec, namespaces, warnings)))).flat();
+  const focusItems = focusSpec && !KINDS.some((spec) => sameGvr(spec, focusSpec)) ? await getFocusedItem(handle, focusSpec, query, warnings) : [];
+  const dynamicItems = focusItems[0] ? await listFocusedRelatedItems(handle, focusItems[0], namespaces, warnings) : [];
+  const items = [...listedItems, ...focusItems, ...dynamicItems];
 
   const nodes = new Map<string, GraphNode>(items.map(({ spec, obj }) => {
     const status = statusFor(spec.kind, obj);
@@ -245,6 +497,7 @@ async function buildGraph(handle: ClusterHandle, query: FocusQuery): Promise<Rel
       addEdge(edges, byUid.get(owner.uid), id, 'owns', owner.kind);
     }
   }
+  addFocusedResourceEdges(edges, focusItems[0], nodeItems, nodes, byUid);
 
   const pods = items.filter((i) => i.spec.kind === 'Pod');
   for (const svc of items.filter((i) => i.spec.kind === 'Service')) {

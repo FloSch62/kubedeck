@@ -40,7 +40,10 @@ export function ClusterSwitcher() {
     const valid = new Set(contexts.map((c) => c.name));
     const keep = selected.filter((name) => valid.has(name));
     if (keep.length !== selected.length) setSelected(keep);
-    for (const name of keep) {
+    const current = contexts.find((c) => c.current);
+    const startupSelection = keep.length > 0 ? keep : current ? [current.name] : [];
+    if (keep.length === 0 && startupSelection.length > 0) setSelected(startupSelection);
+    for (const name of startupSelection) {
       const info = contexts.find((c) => c.name === name);
       if (info && !info.active) connect.mutate({ ctx: name, connect: true });
     }

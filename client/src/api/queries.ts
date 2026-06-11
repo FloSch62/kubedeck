@@ -59,7 +59,13 @@ export function useConnectContext() {
   return useMutation({
     mutationFn: ({ ctx, connect }: { ctx: string; connect: boolean }) =>
       apiFetch<ContextInfo[]>(`/api/contexts/${encodeURIComponent(ctx)}/connect`, { method: connect ? 'POST' : 'DELETE' }),
-    onSuccess: (contexts) => qc.setQueryData(['contexts'], contexts),
+    onSuccess: (contexts) => {
+      qc.setQueryData(['contexts'], contexts);
+      void qc.invalidateQueries({ queryKey: ['api-resources'] });
+      void qc.invalidateQueries({ queryKey: ['api-resources-multi'] });
+      void qc.invalidateQueries({ queryKey: ['namespaces'] });
+      void qc.invalidateQueries({ queryKey: ['overview'] });
+    },
   });
 }
 

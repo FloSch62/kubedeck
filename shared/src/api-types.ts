@@ -8,6 +8,8 @@ export interface ContextInfo {
   user: string;
   namespace?: string;
   server?: string;
+  /** Whether this is kubeconfig's current context. */
+  current?: boolean;
   health: ContextHealth;
   healthMessage?: string;
   /** Whether the server currently holds an active handle (watchers, pollers). */

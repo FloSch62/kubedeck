@@ -52,6 +52,32 @@ function kindPath(group: string, version: string, plural: string): string {
   return `/r/${groupToPath(group)}/${version}/${plural}`;
 }
 
+function versionScore(version: string): [number, number, number] {
+  const match = /^v(\d+)(?:(alpha|beta)(\d+))?$/.exec(version);
+  if (!match) return [0, 0, 0];
+  const stability = match[2] === 'alpha' ? 1 : match[2] === 'beta' ? 2 : 3;
+  return [stability, Number(match[1]), Number(match[3] ?? 0)];
+}
+
+function preferVersion(candidate: ResourceKindInfo, current: ResourceKindInfo): ResourceKindInfo {
+  const a = versionScore(candidate.version);
+  const b = versionScore(current.version);
+  if (a[0] !== b[0]) return a[0] > b[0] ? candidate : current;
+  if (a[1] !== b[1]) return a[1] > b[1] ? candidate : current;
+  if (a[2] !== b[2]) return a[2] > b[2] ? candidate : current;
+  return candidate.version.localeCompare(current.version) > 0 ? candidate : current;
+}
+
+function dedupeCustomNavKinds(kinds: ResourceKindInfo[]): ResourceKindInfo[] {
+  const byKind = new Map<string, ResourceKindInfo>();
+  for (const kind of kinds) {
+    const key = `${kind.group}/${kind.plural}/${kind.kind}`;
+    const current = byKind.get(key);
+    byKind.set(key, current ? preferVersion(kind, current) : kind);
+  }
+  return [...byKind.values()];
+}
+
 function NavEntry({ to, label, icon }: { to: string; label: string; icon?: React.ReactElement }) {
   const location = useLocation();
   const active = location.pathname === to;
@@ -129,7 +155,7 @@ export function NavDrawer() {
     });
 
   const customKinds = useMemo(() => {
-    const custom = (apiResources?.resources ?? []).filter((r) => r.custom && r.verbs.includes('list'));
+    const custom = dedupeCustomNavKinds((apiResources?.resources ?? []).filter((r) => r.custom && r.verbs.includes('list')));
     const byGroup = new Map<string, ResourceKindInfo[]>();
     for (const kind of custom) {
       const list = byGroup.get(kind.group) ?? [];
@@ -245,7 +271,7 @@ export function NavDrawer() {
                       {groupName}
                     </Typography>
                     {visible.map((k) => (
-                      <NavEntry key={`${k.group}/${k.plural}`} to={kindPath(k.group, k.version, k.plural)} label={k.kind} />
+                      <NavEntry key={`${k.group}/${k.version}/${k.plural}`} to={kindPath(k.group, k.version, k.plural)} label={k.kind} />
                     ))}
                   </Box>
                 );
