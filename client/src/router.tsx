@@ -6,6 +6,7 @@ import { HelmPage } from './pages/HelmPage.js';
 import { HelmReleaseDetailPage } from './pages/HelmReleaseDetail.js';
 import { PortForwardsPage } from './pages/PortForwardsPage.js';
 import { DiffPage } from './pages/DiffPage.js';
+import { TopologyPage } from './pages/TopologyPage.js';
 
 export function AppRouter() {
   return (
@@ -17,6 +18,7 @@ export function AppRouter() {
         <Route path="/helm/:ctx/:ns/:name" element={<HelmReleaseDetailPage />} />
         <Route path="/forwards" element={<PortForwardsPage />} />
         <Route path="/diff" element={<DiffPage />} />
+        <Route path="/topology" element={<TopologyPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

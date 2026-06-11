@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import yaml from 'js-yaml';
 import { ApiException, type KubernetesObject } from '@kubernetes/client-node';
-import { groupFromPath, type KubeObject, type ListResponse } from '@kubedeck/shared';
+import { groupFromPath, type KubeObject, type ListResponse, type ResourceDryRunResponse, type ResourceKindInfo, type ValidationFinding } from '@kubedeck/shared';
 import type { AppContext } from '../app.js';
 import { resourcePath } from '../kube/raw-client.js';
 import { maybeRedact } from '../kube/redact.js';
@@ -36,6 +36,35 @@ function parseManifest(body: unknown): KubernetesObject {
     throw new HttpProblem(422, 'manifest must have apiVersion, kind and metadata.name');
   }
   return k;
+}
+
+function splitApiVersion(apiVersion: string): { group: string; version: string } {
+  if (!apiVersion.includes('/')) return { group: '', version: apiVersion };
+  const [group = '', version = ''] = apiVersion.split('/');
+  return { group, version };
+}
+
+function apiExceptionFindings(err: ApiException<unknown>): ValidationFinding[] {
+  const body = typeof err.body === 'object' && err.body ? err.body as { message?: string; reason?: string; details?: { causes?: Array<{ field?: string; message?: string; reason?: string }> } } : undefined;
+  const causes = body?.details?.causes ?? [];
+  if (causes.length) {
+    return causes.map((c) => ({
+      severity: 'error',
+      field: c.field,
+      reason: c.reason,
+      message: c.message ?? body?.message ?? err.message,
+    }));
+  }
+  return [{ severity: 'error', reason: body?.reason, message: body?.message ?? err.message }];
+}
+
+async function kindForManifest(kinds: ResourceKindInfo[], manifest: KubernetesObject): Promise<ResourceKindInfo> {
+  const { group, version } = splitApiVersion(manifest.apiVersion!);
+  const exact = kinds.find((k) => k.group === group && k.version === version && k.kind === manifest.kind);
+  if (exact) return exact;
+  const fallback = kinds.find((k) => k.group === group && k.kind === manifest.kind);
+  if (fallback) return fallback;
+  throw new HttpProblem(422, `resource kind ${manifest.apiVersion}/${manifest.kind} is not available in this cluster`, 'UnknownKind');
 }
 
 export function registerResourceRoutes(app: FastifyInstance, ctx: AppContext): void {
@@ -128,6 +157,70 @@ export function registerResourceRoutes(app: FastifyInstance, ctx: AppContext): v
       const handle = ctx.clusters.get((req.params as { ctx: string }).ctx);
       const manifest = parseManifest(req.body);
       return await handle.objects.create(manifest);
+    } catch (err) {
+      sendError(reply, err);
+      return reply;
+    }
+  });
+
+  app.post<{ Params: { ctx: string }; Body: unknown }>('/api/contexts/:ctx/resources/dry-run', async (req, reply) => {
+    try {
+      const handle = ctx.clusters.get(req.params.ctx);
+      const manifest = parseManifest(req.body);
+      const kind = await kindForManifest(await handle.discovery.getResources(), manifest);
+      const name = manifest.metadata?.name;
+      if (!name) throw new HttpProblem(422, 'manifest must have metadata.name');
+      const namespace = kind.namespaced ? (manifest.metadata?.namespace ?? 'default') : undefined;
+      const findings: ValidationFinding[] = [];
+      if (kind.namespaced && !manifest.metadata?.namespace) {
+        findings.push({ severity: 'warning', field: 'metadata.namespace', message: 'No namespace set; dry-run used default namespace.' });
+      }
+      const query = new URLSearchParams({ dryRun: 'All', fieldManager: 'kubedeck', fieldValidation: 'Strict' });
+      const path = resourcePath(kind.group, kind.version, kind.plural, {
+        namespace,
+        name,
+        query,
+      });
+      const body = typeof req.body === 'string' ? req.body : yaml.dump(manifest, { noRefs: true });
+      try {
+        await handle.raw.json<KubeObject>(path, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/apply-patch+yaml' },
+          body,
+        });
+        const response: ResourceDryRunResponse = {
+          ok: true,
+          ref: {
+            ctx: req.params.ctx,
+            group: kind.group,
+            version: kind.version,
+            plural: kind.plural,
+            kind: kind.kind,
+            name,
+            namespace,
+          },
+          findings,
+        };
+        return response;
+      } catch (err) {
+        if (err instanceof ApiException) {
+          const response: ResourceDryRunResponse = {
+            ok: false,
+            ref: {
+              ctx: req.params.ctx,
+              group: kind.group,
+              version: kind.version,
+              plural: kind.plural,
+              kind: kind.kind,
+              name,
+              namespace,
+            },
+            findings: [...findings, ...apiExceptionFindings(err)],
+          };
+          return response;
+        }
+        throw err;
+      }
     } catch (err) {
       sendError(reply, err);
       return reply;

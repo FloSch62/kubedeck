@@ -63,6 +63,92 @@ export interface ListResponse {
   continue?: string;
 }
 
+export interface ResourceRef {
+  ctx: string;
+  group: string;
+  version: string;
+  plural: string;
+  kind: string;
+  name: string;
+  namespace?: string;
+  uid?: string;
+}
+
+// ---- Search / saved navigation ----
+
+export type SearchResultKind = 'resource' | 'kind' | 'page';
+
+export interface SearchResult {
+  id: string;
+  kind: SearchResultKind;
+  title: string;
+  subtitle?: string;
+  score: number;
+  ref?: ResourceRef;
+  path?: string;
+}
+
+export interface FavoriteItem {
+  id: string;
+  title: string;
+  subtitle?: string;
+  path?: string;
+  ref?: ResourceRef;
+}
+
+export interface SavedView {
+  id: string;
+  title: string;
+  path: string;
+  textFilter?: string;
+  labelSelector?: string;
+  fieldSelector?: string;
+}
+
+// ---- Topology graph ----
+
+export type GraphNodeStatus = 'success' | 'warning' | 'error' | 'unknown';
+
+export interface GraphNode {
+  id: string;
+  ref: ResourceRef;
+  label: string;
+  sublabel?: string;
+  layer: 'entry' | 'route' | 'service' | 'workload' | 'replicaset' | 'pod' | 'storage' | 'node' | 'operator' | 'other';
+  status: GraphNodeStatus;
+  reason?: string;
+}
+
+export interface GraphEdge {
+  id: string;
+  source: string;
+  target: string;
+  label?: string;
+  kind: 'owns' | 'selects' | 'routes' | 'mounts' | 'binds' | 'schedules' | 'manages';
+}
+
+export interface RelationshipGraph {
+  ctx: string;
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  warnings: string[];
+}
+
+// ---- Validation / dry-run ----
+
+export interface ValidationFinding {
+  severity: 'info' | 'warning' | 'error';
+  message: string;
+  field?: string;
+  reason?: string;
+}
+
+export interface ResourceDryRunResponse {
+  ok: boolean;
+  ref?: ResourceRef;
+  findings: ValidationFinding[];
+}
+
 export interface ApiErrorBody {
   message: string;
   reason?: string;

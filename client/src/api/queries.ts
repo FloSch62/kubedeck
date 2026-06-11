@@ -16,9 +16,12 @@ import type {
   ResourceKindInfo,
   WatchStatusState,
   ListResponse,
+  RelationshipGraph,
   PodEnvResponse,
+  ResourceDryRunResponse,
   SecretTlsResponse,
   ScaleRequest,
+  SearchResult,
   RolloutRestartRequest,
   CordonRequest,
   DrainRequest,
@@ -147,6 +150,11 @@ export interface WatchedListState {
   status: Record<string, { state: WatchStatusState | 'loading'; message?: string }>;
 }
 
+export interface ResourceListFilters {
+  labelSelector?: string;
+  fieldSelector?: string;
+}
+
 /**
  * Live multi-cluster resource list: one watch subscription per selected
  * context, merged into a single row set keyed by uid.
@@ -204,17 +212,51 @@ export function useWatchedList(contexts: string[], group: string, version: strin
   return state;
 }
 
-/** Convenience: watched list filtered to the selected namespaces. */
-export function useFilteredList(group: string, version: string, plural: string, namespaced: boolean): WatchedListState {
+/** Convenience: watched list filtered to the selected namespaces, or server-filtered when selectors are set. */
+export function useFilteredList(group: string, version: string, plural: string, namespaced: boolean, filters?: ResourceListFilters): WatchedListState {
   const selected = useClustersStore((s) => s.selected);
   const namespaces = useClustersStore((s) => s.namespaces);
   const list = useWatchedList(selected, group, version, plural);
-  const rows = useMemo(() => {
+  const hasSelectors = !!filters?.labelSelector?.trim() || !!filters?.fieldSelector?.trim();
+  const selectorList = useQuery({
+    queryKey: ['selector-list', selected, namespaces, group, version, plural, filters],
+    queryFn: async () => {
+      const batches = await Promise.all(
+        selected.map(async (ctx) => {
+          const nsTargets = namespaced && namespaces.length ? namespaces : [undefined];
+          const perNs = await Promise.all(
+            nsTargets.map(async (namespace) => {
+              const params = new URLSearchParams();
+              if (namespace) params.set('namespace', namespace);
+              if (filters?.labelSelector?.trim()) params.set('labelSelector', filters.labelSelector.trim());
+              if (filters?.fieldSelector?.trim()) params.set('fieldSelector', filters.fieldSelector.trim());
+              const q = params.toString();
+              const response = await apiFetch<ListResponse>(`/api/contexts/${encodeURIComponent(ctx)}/resources/${groupToPath(group)}/${version}/${plural}${q ? `?${q}` : ''}`);
+              return response.items.map((obj) => ({ ctx, obj }));
+            }),
+          );
+          return perNs.flat();
+        }),
+      );
+      return batches.flat();
+    },
+    enabled: selected.length > 0 && hasSelectors,
+    retry: false,
+  });
+
+  const watchedRows = useMemo(() => {
     if (!namespaced || namespaces.length === 0) return list.rows;
     const set = new Set(namespaces);
     return list.rows.filter((r) => set.has(r.obj.metadata.namespace ?? ''));
   }, [list.rows, namespaces, namespaced]);
-  return { rows, status: list.status };
+  if (hasSelectors) {
+    const state = selectorList.isLoading ? 'loading' : selectorList.error ? 'error' : 'live';
+    return {
+      rows: selectorList.data ?? [],
+      status: Object.fromEntries(selected.map((ctx) => [ctx, { state, message: selectorList.error instanceof Error ? selectorList.error.message : undefined }])),
+    };
+  }
+  return { rows: watchedRows, status: list.status };
 }
 
 // ---- Single resource ----
@@ -340,6 +382,17 @@ export function useCreateResource() {
   });
 }
 
+export function useDryRunResource() {
+  return useMutation({
+    mutationFn: ({ ctx, yamlBody }: { ctx: string; yamlBody: string }) =>
+      apiFetch<ResourceDryRunResponse>(`/api/contexts/${encodeURIComponent(ctx)}/resources/dry-run`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/yaml' },
+        body: yamlBody,
+      }),
+  });
+}
+
 export function useDeleteResource() {
   return useMutation({
     mutationFn: ({ ctx, group, version, plural, name, namespace }: { ctx: string; group: string; version: string; plural: string; name: string; namespace?: string }) =>
@@ -425,6 +478,61 @@ export function useOverview(ctx: string) {
     queryKey: ['overview', ctx],
     queryFn: () => apiFetch<ClusterOverview>(`/api/contexts/${encodeURIComponent(ctx)}/overview`),
     refetchInterval: 10_000,
+  });
+}
+
+// ---- Search / topology ----
+
+export function useGlobalSearch(contexts: string[], query: string) {
+  return useQuery({
+    queryKey: ['global-search', contexts, query],
+    queryFn: async () => {
+      const q = query.trim();
+      const batches = await Promise.all(
+        contexts.map((ctx) =>
+          apiFetch<SearchResult[]>(`/api/contexts/${encodeURIComponent(ctx)}/search?q=${encodeURIComponent(q)}&limit=30`).catch(() => [] as SearchResult[]),
+        ),
+      );
+      return batches.flat().sort((a, b) => b.score - a.score || a.title.localeCompare(b.title)).slice(0, 80);
+    },
+    enabled: contexts.length > 0 && query.trim().length > 1,
+    staleTime: 10_000,
+  });
+}
+
+export interface TopologyFocus {
+  group: string;
+  version: string;
+  plural: string;
+  kind: string;
+  name: string;
+  namespace?: string;
+  depth?: number;
+}
+
+export function useTopologyGraphs(contexts: string[], namespaces: string[], focus?: TopologyFocus) {
+  return useQuery({
+    queryKey: ['topology-graphs', contexts, namespaces, focus],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (namespaces.length) params.set('namespace', namespaces.join(','));
+      if (focus) {
+        params.set('focusGroup', focus.group);
+        params.set('focusVersion', focus.version);
+        params.set('focusPlural', focus.plural);
+        params.set('focusKind', focus.kind);
+        params.set('focusName', focus.name);
+        params.set('focusNamespace', focus.namespace ?? '');
+        params.set('depth', String(focus.depth ?? 2));
+      }
+      const q = params.toString();
+      const graphs = await Promise.all(
+        contexts.map((ctx) => apiFetch<RelationshipGraph>(`/api/contexts/${encodeURIComponent(ctx)}/graph${q ? `?${q}` : ''}`).catch((err) => ({ ctx, nodes: [], edges: [], warnings: [err instanceof Error ? err.message : String(err)] }) as RelationshipGraph)),
+      );
+      return graphs;
+    },
+    enabled: contexts.length > 0,
+    refetchInterval: 20_000,
   });
 }
 

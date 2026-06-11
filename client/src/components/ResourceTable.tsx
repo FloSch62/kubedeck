@@ -9,6 +9,12 @@ interface Props {
   columns: GridColDef<ClusterRow>[];
   loading?: boolean;
   statusText?: string;
+  filter?: string;
+  labelSelector?: string;
+  fieldSelector?: string;
+  onFilterChange?: (value: string) => void;
+  onLabelSelectorChange?: (value: string) => void;
+  onFieldSelectorChange?: (value: string) => void;
   onRowClick?: (row: ClusterRow) => void;
   /** Extra toolbar elements (e.g. create button). */
   toolbar?: React.ReactNode;
@@ -17,27 +23,48 @@ interface Props {
   checkboxSelection?: boolean;
 }
 
-export function ResourceTable({ rows, columns, loading, statusText, onRowClick, toolbar, checkboxSelection, onSelectionChange }: Props) {
-  const [filter, setFilter] = useState('');
+export function ResourceTable({
+  rows,
+  columns,
+  loading,
+  statusText,
+  filter,
+  labelSelector,
+  fieldSelector,
+  onFilterChange,
+  onLabelSelectorChange,
+  onFieldSelectorChange,
+  onRowClick,
+  toolbar,
+  checkboxSelection,
+  onSelectionChange,
+}: Props) {
+  const [localFilter, setLocalFilter] = useState('');
+  const activeFilter = filter ?? localFilter;
 
   const filtered = useMemo(() => {
-    if (!filter) return rows;
-    const f = filter.toLowerCase();
+    if (!activeFilter) return rows;
+    const f = activeFilter.toLowerCase();
     return rows.filter(
       (r) =>
         r.obj.metadata.name.toLowerCase().includes(f) ||
         (r.obj.metadata.namespace ?? '').toLowerCase().includes(f) ||
         r.ctx.toLowerCase().includes(f),
     );
-  }, [rows, filter]);
+  }, [rows, activeFilter]);
+
+  const setTextFilter = (value: string) => {
+    if (onFilterChange) onFilterChange(value);
+    else setLocalFilter(value);
+  };
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
       <Stack direction="row" spacing={1} alignItems="center" sx={{ px: 1.5, py: 1, flexShrink: 0 }}>
         <TextField
           placeholder="Search…"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
+          value={activeFilter}
+          onChange={(e) => setTextFilter(e.target.value)}
           sx={{ width: 240 }}
           slotProps={{
             input: {
@@ -49,6 +76,22 @@ export function ResourceTable({ rows, columns, loading, statusText, onRowClick, 
             },
           }}
         />
+        {onLabelSelectorChange && (
+          <TextField
+            placeholder="Label selector"
+            value={labelSelector ?? ''}
+            onChange={(e) => onLabelSelectorChange(e.target.value)}
+            sx={{ width: 220 }}
+          />
+        )}
+        {onFieldSelectorChange && (
+          <TextField
+            placeholder="Field selector"
+            value={fieldSelector ?? ''}
+            onChange={(e) => onFieldSelectorChange(e.target.value)}
+            sx={{ width: 220 }}
+          />
+        )}
         <Chip label={`${filtered.length} items`} variant="outlined" />
         {statusText && (
           <Typography variant="caption" color="warning.main">

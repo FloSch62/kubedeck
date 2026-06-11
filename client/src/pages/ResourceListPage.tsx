@@ -3,9 +3,12 @@ import { Alert, Box, Button, Dialog, DialogContent, DialogTitle, Typography } fr
 import AddIcon from '@mui/icons-material/Add';
 import SubjectIcon from '@mui/icons-material/Subject';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
+import BookmarkAddOutlinedIcon from '@mui/icons-material/BookmarkAddOutlined';
+import StarIcon from '@mui/icons-material/Star';
+import StarBorderIcon from '@mui/icons-material/StarBorder';
 import { useParams, useSearchParams } from 'react-router';
-import { columnsForKind, groupFromPath, type ResourceKindInfo } from '@kubedeck/shared';
-import { useApiResourcesForContexts, useCreateResource, useFilteredList, useResourceMetrics, type ClusterRow } from '../api/queries.js';
+import { columnsForKind, groupFromPath, groupToPath, gvkForResource, pluralLabel, type ResourceKindInfo } from '@kubedeck/shared';
+import { useApiResourcesForContexts, useCreateResource, useDryRunResource, useFilteredList, useResourceMetrics, type ClusterRow } from '../api/queries.js';
 import { useClustersStore } from '../state/clusters.js';
 import { useDockStore, dockTabId } from '../state/dock.js';
 import { ResourceTable } from '../components/ResourceTable.js';
@@ -15,6 +18,7 @@ import { useDetailStore } from '../state/detail.js';
 import { RowActions } from '../components/RowActions.js';
 import { YamlEditor } from '../components/YamlEditor.js';
 import { EmptyState } from '../components/EmptyState.js';
+import { useNavigationStore } from '../state/navigation.js';
 
 export function ResourceListPage() {
   const params = useParams<{ group: string; version: string; plural: string }>();
@@ -28,19 +32,30 @@ export function ResourceListPage() {
     () => apiResources?.resources.find((r) => r.group === group && r.version === version && r.plural === plural),
     [apiResources, group, version, plural],
   );
-  const kind = kindInfo?.kind ?? plural;
+  const builtinKind = useMemo(() => gvkForResource(group, version, plural), [group, version, plural]);
+  const kind = kindInfo?.kind ?? builtinKind?.kind ?? plural;
+  const resourceTitle = pluralLabel(kind);
   const namespaced = kindInfo?.namespaced ?? true;
 
-  const list = useFilteredList(group, version, plural, namespaced);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const textFilter = searchParams.get('q') ?? '';
+  const labelSelector = searchParams.get('label') ?? '';
+  const fieldSelector = searchParams.get('field') ?? '';
+
+  const list = useFilteredList(group, version, plural, namespaced, { labelSelector, fieldSelector });
   const isPodOrNode = kind === 'Pod' || kind === 'Node';
   const { data: podMetrics } = useResourceMetrics(isPodOrNode ? selected : [], kind === 'Node' ? 'nodes' : 'pods');
   const metricsUnavailable = isPodOrNode ? selected.filter((ctx) => podMetrics?.get(ctx)?.available === false) : [];
 
-  const [searchParams, setSearchParams] = useSearchParams();
   const [createOpen, setCreateOpen] = useState(false);
   const [selectedRows, setSelectedRows] = useState<ClusterRow[]>([]);
   const addTab = useDockStore((s) => s.addTab);
   const create = useCreateResource();
+  const dryRun = useDryRunResource();
+  const addFavorite = useNavigationStore((s) => s.addFavorite);
+  const removeFavorite = useNavigationStore((s) => s.removeFavorite);
+  const isFavorite = useNavigationStore((s) => s.isFavorite);
+  const addSavedView = useNavigationStore((s) => s.addSavedView);
 
   // Detail selection deep-linked via ?sel=ctx|namespace|name
   const sel: ResourceSelection | undefined = useMemo(() => {
@@ -64,10 +79,22 @@ export function ResourceListPage() {
   // against clearing on mount, before the mirror effect has opened it.
   const wasDetailOpen = useRef(false);
   useEffect(() => {
-    if (wasDetailOpen.current && !detailOpen && searchParams.get('sel')) setSearchParams({});
+    if (wasDetailOpen.current && !detailOpen && searchParams.get('sel')) {
+      const next = new URLSearchParams(searchParams);
+      next.delete('sel');
+      setSearchParams(next);
+    }
     wasDetailOpen.current = detailOpen;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detailOpen]);
+
+  const setQueryParam = (key: string, value: string) => {
+    const next = new URLSearchParams(searchParams);
+    if (value.trim()) next.set(key, value);
+    else next.delete(key);
+    next.delete('sel');
+    setSearchParams(next);
+  };
 
   const columns = useMemo(() => {
     const ids = columnsForKind(kind, namespaced);
@@ -107,11 +134,42 @@ export function ResourceListPage() {
   }
 
   const multiLogs = kind === 'Pod' && selectedRows.length > 0;
+  const kindPath = `/r/${groupToPath(group)}/${version}/${plural}`;
+  const kindFavoriteId = `kind:${group}/${version}/${plural}`;
+  const kindFavorite = isFavorite(kindFavoriteId);
+
+  const saveCurrentView = () => {
+    const params = new URLSearchParams();
+    if (textFilter.trim()) params.set('q', textFilter.trim());
+    if (labelSelector.trim()) params.set('label', labelSelector.trim());
+    if (fieldSelector.trim()) params.set('field', fieldSelector.trim());
+    const path = `${kindPath}${params.toString() ? `?${params.toString()}` : ''}`;
+    addSavedView({
+      id: `view:${path}`,
+      title: `${resourceTitle}${textFilter || labelSelector || fieldSelector ? ' view' : ''}`,
+      path,
+      textFilter: textFilter.trim() || undefined,
+      labelSelector: labelSelector.trim() || undefined,
+      fieldSelector: fieldSelector.trim() || undefined,
+    });
+  };
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
       <Box sx={{ px: 1.5, pt: 1.5 }}>
-        <Typography variant="h6">{kind === 'Endpoints' ? kind : `${kind}s`}</Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Typography variant="h6">{resourceTitle}</Typography>
+          <Button
+            size="small"
+            startIcon={kindFavorite ? <StarIcon /> : <StarBorderIcon />}
+            onClick={() => {
+              if (kindFavorite) removeFavorite(kindFavoriteId);
+              else addFavorite({ id: kindFavoriteId, title: resourceTitle, subtitle: `${group || 'core'}/${version}`, path: kindPath });
+            }}
+          >
+            {kindFavorite ? 'Favorited' : 'Favorite'}
+          </Button>
+        </Box>
         {errors.map(([ctx, s]) => (
           <Alert key={ctx} severity="error" sx={{ mt: 0.5 }}>
             {ctx}: {s.message ?? 'watch error'}
@@ -137,11 +195,24 @@ export function ResourceListPage() {
         rows={list.rows}
         columns={columns}
         loading={Object.values(list.status).some((s) => s.state === 'loading')}
-        onRowClick={(row) => setSearchParams({ sel: `${row.ctx}|${row.obj.metadata.namespace ?? ''}|${row.obj.metadata.name}` })}
+        filter={textFilter}
+        labelSelector={labelSelector}
+        fieldSelector={fieldSelector}
+        onFilterChange={(value) => setQueryParam('q', value)}
+        onLabelSelectorChange={(value) => setQueryParam('label', value)}
+        onFieldSelectorChange={(value) => setQueryParam('field', value)}
+        onRowClick={(row) => {
+          const next = new URLSearchParams(searchParams);
+          next.set('sel', `${row.ctx}|${row.obj.metadata.namespace ?? ''}|${row.obj.metadata.name}`);
+          setSearchParams(next);
+        }}
         checkboxSelection={kind === 'Pod'}
         onSelectionChange={kind === 'Pod' ? setSelectedRows : undefined}
         toolbar={
           <>
+            <Button startIcon={<BookmarkAddOutlinedIcon />} variant="outlined" onClick={saveCurrentView}>
+              Save view
+            </Button>
             {multiLogs && (
               <Button
                 startIcon={<SubjectIcon />}
@@ -187,6 +258,7 @@ export function ResourceListPage() {
               await create.mutateAsync({ ctx: selected[0]!, yamlBody: text });
               setCreateOpen(false);
             }}
+            onDryRun={(text) => dryRun.mutateAsync({ ctx: selected[0]!, yamlBody: text })}
           />
         </DialogContent>
       </Dialog>

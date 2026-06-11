@@ -3,11 +3,14 @@ import {
   Box,
   Collapse,
   Drawer,
+  IconButton,
   InputAdornment,
   List,
+  ListItem,
   ListItemButton,
   ListItemIcon,
   ListItemText,
+  Tooltip,
   TextField,
   Typography,
 } from '@mui/material';
@@ -17,6 +20,7 @@ import SpaceDashboardOutlinedIcon from '@mui/icons-material/SpaceDashboardOutlin
 import SailingOutlinedIcon from '@mui/icons-material/SailingOutlined';
 import CableOutlinedIcon from '@mui/icons-material/CableOutlined';
 import DifferenceOutlinedIcon from '@mui/icons-material/DifferenceOutlined';
+import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import AppsOutlinedIcon from '@mui/icons-material/AppsOutlined';
 import LanOutlinedIcon from '@mui/icons-material/LanOutlined';
 import TuneOutlinedIcon from '@mui/icons-material/TuneOutlined';
@@ -24,10 +28,12 @@ import StorageOutlinedIcon from '@mui/icons-material/StorageOutlined';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
 import AdminPanelSettingsOutlinedIcon from '@mui/icons-material/AdminPanelSettingsOutlined';
 import ExtensionOutlinedIcon from '@mui/icons-material/ExtensionOutlined';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import { NavLink, useLocation } from 'react-router';
-import { BUILTIN_NAV_GROUPS, groupToPath, type ResourceKindInfo } from '@kubedeck/shared';
+import { BUILTIN_NAV_GROUPS, groupToPath, pluralLabel, type ResourceKindInfo, type SavedView } from '@kubedeck/shared';
 import { useApiResourcesForContexts } from '../api/queries.js';
 import { useClustersStore } from '../state/clusters.js';
+import { useNavigationStore } from '../state/navigation.js';
 
 const WIDTH = 228;
 // Indent of group items so they line up under the group label (button pl 16px + icon 26px).
@@ -59,6 +65,37 @@ function NavEntry({ to, label, icon }: { to: string; label: string; icon?: React
   );
 }
 
+function SavedViewEntry({ view, onDelete }: { view: SavedView; onDelete: (id: string) => void }) {
+  const location = useLocation();
+  const active = `${location.pathname}${location.search}` === view.path;
+  return (
+    <ListItem
+      disablePadding
+      secondaryAction={
+        <Tooltip title="Delete saved view">
+          <IconButton
+            aria-label={`Delete saved view ${view.title}`}
+            size="small"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onDelete(view.id);
+            }}
+            sx={{ '& svg': { fontSize: 17 } }}
+          >
+            <DeleteOutlineIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      }
+      sx={{ '& .MuiListItemSecondaryAction-root': { right: 4 } }}
+    >
+      <ListItemButton component={NavLink} to={view.path} dense selected={active} sx={{ pl: ITEM_INDENT, py: 0.375, pr: 4.5 }}>
+        <ListItemText primary={view.title} slotProps={{ primary: { variant: 'body2', noWrap: true } }} />
+      </ListItemButton>
+    </ListItem>
+  );
+}
+
 function GroupHeader({ title, icon, open, onClick }: { title: string; icon?: React.ReactElement; open: boolean; onClick: () => void }) {
   return (
     <ListItemButton dense onClick={onClick} sx={{ mt: 1.25, py: 0.25, color: 'text.secondary' }}>
@@ -77,6 +114,9 @@ function GroupHeader({ title, icon, open, onClick }: { title: string; icon?: Rea
 export function NavDrawer() {
   const selected = useClustersStore((s) => s.selected);
   const { data: apiResources } = useApiResourcesForContexts(selected);
+  const favorites = useNavigationStore((s) => s.favorites);
+  const savedViews = useNavigationStore((s) => s.savedViews);
+  const removeSavedView = useNavigationStore((s) => s.removeSavedView);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set(['Custom Resources']));
   const [filter, setFilter] = useState('');
 
@@ -139,9 +179,30 @@ export function NavDrawer() {
       </Box>
       <List dense disablePadding sx={{ pb: 4 }}>
         <NavEntry to="/" label="Overview" icon={<SpaceDashboardOutlinedIcon />} />
+        <NavEntry to="/topology" label="Topology" icon={<AccountTreeOutlinedIcon />} />
         <NavEntry to="/helm" label="Helm Releases" icon={<SailingOutlinedIcon />} />
         <NavEntry to="/forwards" label="Port Forwards" icon={<CableOutlinedIcon />} />
         <NavEntry to="/diff" label="Diff" icon={<DifferenceOutlinedIcon />} />
+        {favorites.length > 0 && (
+          <Box>
+            <GroupHeader title="Favorites" icon={<SearchIcon />} open={isOpen('Favorites')} onClick={() => toggleGroup('Favorites')} />
+            <Collapse in={isOpen('Favorites')}>
+              {favorites.map((f) => (
+                <NavEntry key={f.id} to={f.path ?? '/'} label={f.title} />
+              ))}
+            </Collapse>
+          </Box>
+        )}
+        {savedViews.length > 0 && (
+          <Box>
+            <GroupHeader title="Saved Views" icon={<SearchIcon />} open={isOpen('Saved Views')} onClick={() => toggleGroup('Saved Views')} />
+            <Collapse in={isOpen('Saved Views')}>
+              {savedViews.map((v) => (
+                <SavedViewEntry key={v.id} view={v} onDelete={removeSavedView} />
+              ))}
+            </Collapse>
+          </Box>
+        )}
         {BUILTIN_NAV_GROUPS.map((group) => {
           const visible = group.kinds.filter((k) => matches(k.kind));
           if (!visible.length) return null;
@@ -195,11 +256,4 @@ export function NavDrawer() {
       </List>
     </Drawer>
   );
-}
-
-function pluralLabel(kind: string): string {
-  if (kind === 'Endpoints') return 'Endpoints';
-  if (kind.endsWith('Policy')) return `${kind.slice(0, -6)}Policies`;
-  if (kind.endsWith('s')) return kind;
-  return `${kind}s`;
 }

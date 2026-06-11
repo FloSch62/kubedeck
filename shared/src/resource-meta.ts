@@ -115,10 +115,29 @@ export function columnsForKind(kind: string, namespaced: boolean): string[] {
   return KIND_COLUMNS[kind] ?? (namespaced ? GENERIC_COLUMNS : GENERIC_CLUSTER_COLUMNS);
 }
 
+export function pluralLabel(kind: string): string {
+  if (!kind) return kind;
+  if (kind === 'Endpoints') return 'Endpoints';
+  if (kind === kind.toLowerCase()) return kind.charAt(0).toUpperCase() + kind.slice(1);
+  if (kind.endsWith('Policy')) return `${kind.slice(0, -6)}Policies`;
+  if (kind.endsWith('y')) return `${kind.slice(0, -1)}ies`;
+  if (kind.endsWith('s')) return kind.endsWith('ss') ? `${kind}es` : kind;
+  if (kind.endsWith('x') || kind.endsWith('ch') || kind.endsWith('sh')) return `${kind}es`;
+  return `${kind}s`;
+}
+
 /** Look up the GVK for a builtin kind (e.g. to navigate to a related resource). */
 export function gvkForKind(kind: string): GVK | undefined {
   for (const group of BUILTIN_NAV_GROUPS) {
     const found = group.kinds.find((k) => k.kind === kind);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+export function gvkForResource(group: string, version: string, plural: string): GVK | undefined {
+  for (const navGroup of BUILTIN_NAV_GROUPS) {
+    const found = navGroup.kinds.find((k) => k.group === group && k.version === version && k.plural === plural);
     if (found) return found;
   }
   return undefined;

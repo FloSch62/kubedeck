@@ -14,6 +14,8 @@ import { registerDetailRoutes } from './routes/detail.js';
 import { registerMetricsRoutes } from './routes/metrics.js';
 import { registerHelmRoutes } from './routes/helm.js';
 import { registerPortForwardRoutes } from './routes/portforward.js';
+import { registerGraphRoutes } from './routes/graph.js';
+import { registerSearchRoutes } from './routes/search.js';
 import { registerWatchSocket } from './ws/watch-socket.js';
 import { registerLogsSocket } from './ws/logs-socket.js';
 import { registerExecSocket } from './ws/exec-socket.js';
@@ -78,6 +80,8 @@ export async function buildApp(config: ServerConfig): Promise<{ app: FastifyInst
   registerMetricsRoutes(app, ctx);
   registerHelmRoutes(app, ctx);
   registerPortForwardRoutes(app, ctx);
+  registerGraphRoutes(app, ctx);
+  registerSearchRoutes(app, ctx);
   registerWatchSocket(app, ctx);
   registerLogsSocket(app, ctx);
   registerExecSocket(app, ctx);

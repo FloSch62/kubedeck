@@ -4,7 +4,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import yaml from 'js-yaml';
 import type { KubeObject } from '@kubedeck/shared';
-import { useApplyResource, useResource, useResourceEvents } from '../api/queries.js';
+import { useApplyResource, useDryRunResource, useResource, useResourceEvents } from '../api/queries.js';
 import { YamlEditor } from './YamlEditor.js';
 import { GenericDetail } from './detail/GenericDetail.js';
 import { PodDetail } from './detail/PodDetail.js';
@@ -14,6 +14,7 @@ import { SecretDetail } from './detail/SecretDetail.js';
 import { AgeCell } from './AgeCell.js';
 import { MetricsChart } from './MetricsChart.js';
 import { RowActions } from './RowActions.js';
+import { TopologyGraph } from './TopologyGraph.js';
 
 export interface ResourceSelection {
   ctx: string;
@@ -45,9 +46,11 @@ export function ResourceDetailDrawer({ sel, onClose, onBack }: Props) {
   const { data: obj, refetch } = useResource(sel ? { ...sel, reveal: isSecret && reveal } : undefined);
   const { data: events } = useResourceEvents(tab === 'events' && sel ? { ctx: sel.ctx, name: sel.name, kind: sel.kind, namespace: sel.namespace } : undefined);
   const apply = useApplyResource();
+  const dryRun = useDryRunResource();
 
   const yamlText = useMemo(() => (obj ? yaml.dump(obj, { noRefs: true, lineWidth: 140 }) : ''), [obj]);
   const hasMetrics = sel?.kind === 'Pod' || sel?.kind === 'Node';
+  const mapNamespaces = sel?.namespace ? [sel.namespace] : [];
 
   const handleApply = async (text: string) => {
     if (!sel) return;
@@ -64,7 +67,7 @@ export function ResourceDetailDrawer({ sel, onClose, onBack }: Props) {
   };
 
   return (
-    <Drawer anchor="right" open={!!sel} onClose={onClose} slotProps={{ paper: { sx: { width: 'min(720px, 80vw)' } } }}>
+    <Drawer anchor="right" open={!!sel} onClose={onClose} slotProps={{ paper: { sx: { width: tab === 'map' ? 'min(1060px, 92vw)' : 'min(720px, 80vw)' } } }}>
       {sel && (
         <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
           <Stack direction="row" alignItems="center" sx={{ px: 2, py: 1, borderBottom: 1, borderColor: 'divider' }}>
@@ -103,16 +106,37 @@ export function ResourceDetailDrawer({ sel, onClose, onBack }: Props) {
           </Stack>
           <Tabs value={tab} onChange={(_e, v) => setTab(v as string)} sx={{ borderBottom: 1, borderColor: 'divider', minHeight: 36 }}>
             <Tab value="overview" label="Overview" sx={{ minHeight: 36 }} />
+            <Tab value="map" label="Map" sx={{ minHeight: 36 }} />
             <Tab value="yaml" label="YAML" sx={{ minHeight: 36 }} />
             <Tab value="events" label="Events" sx={{ minHeight: 36 }} />
             {hasMetrics && <Tab value="metrics" label="Metrics" sx={{ minHeight: 36 }} />}
           </Tabs>
           <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
             {tab === 'overview' && obj && <OverviewForKind kind={sel.kind} obj={obj} ctx={sel.ctx} />}
+            {tab === 'map' && (
+              <Box sx={{ height: '100%', p: 1.25 }}>
+                <TopologyGraph
+                  contexts={[sel.ctx]}
+                  namespaces={mapNamespaces}
+                  focus={{
+                    group: sel.group,
+                    version: sel.version,
+                    plural: sel.plural,
+                    kind: sel.kind,
+                    name: sel.name,
+                    namespace: sel.namespace,
+                    depth: 2,
+                  }}
+                  hideDisconnected={false}
+                  emptyTitle="No related resources found"
+                />
+              </Box>
+            )}
             {tab === 'yaml' && (
               <YamlEditor
                 value={yamlText}
                 onApply={handleApply}
+                onDryRun={sel ? (text) => dryRun.mutateAsync({ ctx: sel.ctx, yamlBody: text }) : undefined}
                 toolbar={
                   isSecret ? (
                     <FormControlLabel
