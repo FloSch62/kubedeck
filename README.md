@@ -38,6 +38,14 @@ Kubedeck is a *local* tool:
 
 ## Getting started
 
+### Desktop app
+
+Download the installer for your platform from the [releases page](https://github.com/FloSch62/kubedeck/releases): Windows (`.exe`), macOS (`.dmg`, Intel + Apple Silicon), Linux (`.AppImage`/`.deb`).
+
+> **macOS note:** builds are not code-signed yet. On first launch, right-click the app and choose *Open* (or run `xattr -dr com.apple.quarantine /Applications/Kubedeck.app`).
+
+### From source
+
 Requires **Node.js ≥ 22** and **pnpm**.
 
 ```bash
@@ -55,6 +63,17 @@ pnpm dev            # tsx-watch server on :3001 + Vite client on :5173
 ```
 
 Open `http://localhost:5173` — the Vite dev server proxies `/api` and `/ws` to the backend.
+
+To run the desktop shell locally: `pnpm electron` (builds everything, then launches Electron). `pnpm dist` packages installers for the current platform into `electron/release/`.
+
+### Releasing
+
+Push a `v*` tag (or create a GitHub release with a new `v*` tag — that pushes the tag too). The release workflow then builds installers on Windows/macOS/Linux runners and attaches them to the GitHub release for that tag, creating it if it doesn't exist yet:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
 
 ### Test clusters
 
@@ -84,6 +103,7 @@ Open `http://localhost:5173` — the Vite dev server proxies `/api` and `/ws` to
 - `shared/` — TypeScript types + the WebSocket protocol (zod-validated) both sides compile against.
 - `server/` — cluster manager (one isolated `KubeConfig` per context), generic resource routes driven by API discovery, informer-style watchers, helm release codec (base64 → gzip → JSON, read **and** write for rollback), exec bridge shared by container/node shells and file copy, metrics poller with ring buffers.
 - `client/` — app shell (cluster switcher, nav drawer, namespace filter, command palette, bottom dock for terminals/logs), generic resource list page powered by per-kind column presets + CRD printer columns, detail drawer, overview/events/helm/diff/forwards pages.
+- `electron/` — desktop shell: runs the same server in-process on a random localhost port and opens it in a BrowserWindow; packaged with electron-builder.
 
 ## Known limitations
 

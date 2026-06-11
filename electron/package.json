@@ -1,0 +1,31 @@
+{
+  "name": "@kubedeck/electron",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Kubedeck desktop app",
+  "license": "MIT",
+  "homepage": "https://github.com/FloSch62/kubedeck",
+  "author": {
+    "name": "Florian Schwarz",
+    "email": "schwarz.flori.88@gmail.com"
+  },
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "node scripts/render-icon.mjs && node esbuild.config.mjs && tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "start": "electron .",
+    "pack:dir": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "@kubedeck/server": "workspace:*",
+    "@types/node": "^22.15.0",
+    "electron": "^38.2.0",
+    "electron-builder": "^26.0.12",
+    "esbuild": "^0.25.0",
+    "fix-path": "^5.0.0",
+    "sharp": "^0.34.0",
+    "typescript": "^5.8.3"
+  }
+}

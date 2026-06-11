@@ -1,0 +1,44 @@
+appId: io.github.flosch62.kubedeck
+productName: Kubedeck
+executableName: kubedeck
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/**
+  - build/icon.png
+  - package.json
+asar: true
+extraResources:
+  - from: ../client/dist
+    to: client
+icon: build/icon.png
+artifactName: kubedeck-${version}-${os}-${arch}.${ext}
+npmRebuild: false
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+    - target: zip
+      arch: [x64, arm64]
+linux:
+  category: Development
+  synopsis: Kubernetes GUI
+  target:
+    - target: AppImage
+      arch: [x64]
+    - target: deb
+      arch: [x64]
+publish:
+  provider: github
+  owner: FloSch62
+  repo: kubedeck
+  releaseType: release

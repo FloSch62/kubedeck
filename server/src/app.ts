@@ -34,7 +34,7 @@ export async function buildApp(config: ServerConfig): Promise<{ app: FastifyInst
   const app = Fastify({
     logger: {
       level: process.env.LOG_LEVEL ?? 'info',
-      transport: process.env.NODE_ENV !== 'production' ? { target: 'pino-pretty', options: { translateTime: 'HH:MM:ss' } } : undefined,
+      transport: config.prettyLogs ? { target: 'pino-pretty', options: { translateTime: 'HH:MM:ss' } } : undefined,
     },
     // Resource lists can be large; YAML applies too.
     bodyLimit: 32 * 1024 * 1024,
@@ -91,7 +91,7 @@ export async function buildApp(config: ServerConfig): Promise<{ app: FastifyInst
   registerNodeShellSocket(app, ctx);
 
   // Serve the built client in production (same-origin, no CORS needed).
-  const clientDist = path.resolve(__dirname, '../../client/dist');
+  const clientDist = config.staticRoot ?? path.resolve(__dirname, '../../client/dist');
   if (existsSync(clientDist)) {
     await app.register(fastifyStatic, { root: clientDist });
     app.setNotFoundHandler((req, reply) => {

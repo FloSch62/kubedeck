@@ -1,22 +1,21 @@
 import { loadConfig } from './config.js';
-import { buildApp } from './app.js';
+import { startServer } from './server.js';
 
 const config = loadConfig();
-const { app } = await buildApp(config);
 
+let server;
 try {
-  await app.listen({ host: config.host, port: config.port });
+  server = await startServer(config);
 } catch (err) {
-  app.log.error(err);
+  console.error(err);
   process.exit(1);
 }
 
-const url = `http://${config.host}:${config.port}/?token=${config.token}`;
-app.log.info(`Kubedeck ready at ${url}`);
+server.app.log.info(`Kubedeck ready at ${server.url}`);
 
 if (config.openBrowser) {
   const { default: open } = await import('open');
-  await open(url).catch(() => {
+  await open(server.url).catch(() => {
     /* headless environments: URL is already logged */
   });
 }

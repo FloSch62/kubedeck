@@ -11,6 +11,8 @@
     "dev": "pnpm -r --parallel --stream dev",
     "build": "pnpm -r build",
     "start": "node server/dist/index.js",
+    "electron": "pnpm build && pnpm --filter @kubedeck/electron start",
+    "dist": "pnpm build && pnpm --filter @kubedeck/electron dist",
     "typecheck": "pnpm -r typecheck",
     "lint": "pnpm -r lint"
   },

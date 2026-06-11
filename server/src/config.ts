@@ -9,6 +9,21 @@ export interface ServerConfig {
   devToken?: string;
   openBrowser: boolean;
   kubeconfigOverride?: string;
+  /** Directory to serve the built client from; defaults to the repo's client/dist. */
+  staticRoot?: string;
+  /** Use the pino-pretty worker transport (unusable inside a bundled main process). */
+  prettyLogs: boolean;
+}
+
+export function resolveConfig(overrides: Partial<ServerConfig> = {}): ServerConfig {
+  return {
+    host: '127.0.0.1',
+    port: 3001,
+    token: overrides.devToken ?? randomBytes(24).toString('base64url'),
+    openBrowser: true,
+    prettyLogs: process.env.NODE_ENV !== 'production',
+    ...overrides,
+  };
 }
 
 function parseArgs(argv: string[]): Map<string, string> {
@@ -38,12 +53,10 @@ export function loadConfig(): ServerConfig {
   // In dev the Vite client can't learn a random token at startup, so use a
   // well-known one; the server still only listens on 127.0.0.1.
   const devToken = dev ? 'dev' : undefined;
-  return {
-    host: '127.0.0.1',
+  return resolveConfig({
     port: Number(args.get('port') ?? process.env.PORT ?? 3001),
-    token: devToken ?? randomBytes(24).toString('base64url'),
     devToken,
     openBrowser: !dev && args.get('no-open') !== 'true' && process.env.KUBEDECK_NO_OPEN !== '1',
     kubeconfigOverride: args.get('kubeconfig') ?? undefined,
-  };
+  });
 }

@@ -17,6 +17,17 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+      - name: Cache Electron binaries
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+          key: electron-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm build
+      # Unpacked desktop build so a broken electron-builder config fails PRs.
+      - run: pnpm --filter @kubedeck/electron exec electron-builder --dir --linux
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'

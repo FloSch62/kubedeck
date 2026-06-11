@@ -1,5 +1,7 @@
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import type { FastifyBaseLogger } from 'fastify';
 import {
   AppsV1Api,
@@ -146,9 +148,9 @@ export class ClusterManager extends EventEmitter {
   private kubeconfigPaths(): string[] {
     if (this.kubeconfigOverride) return [this.kubeconfigOverride];
     const env = process.env.KUBECONFIG;
-    if (env) return env.split(':').filter(Boolean);
-    const home = process.env.HOME ?? '';
-    return home ? [`${home}/.kube/config`] : [];
+    if (env) return env.split(path.delimiter).filter(Boolean);
+    const home = os.homedir();
+    return home ? [path.join(home, '.kube', 'config')] : [];
   }
 
   private watchKubeconfigFiles(): void {

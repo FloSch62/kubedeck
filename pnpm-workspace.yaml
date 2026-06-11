@@ -2,5 +2,9 @@ packages:
   - shared
   - server
   - client
+  - electron
 allowBuilds:
   esbuild: true
+  electron: true
+  sharp: true
+  electron-winstaller: false

@@ -1,5 +1,7 @@
 node_modules/
 dist/
 *.tsbuildinfo
+electron/build/
+electron/release/
 .env
 .DS_Store

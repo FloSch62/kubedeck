@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": "./dist/server.js"
+  },
   "scripts": {
     "dev": "KUBEDECK_DEV=1 tsx watch --clear-screen=false src/index.ts",
     "build": "tsc",
