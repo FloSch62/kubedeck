@@ -26,11 +26,13 @@ nsis:
   allowToChangeInstallationDirectory: true
 mac:
   category: public.app-category.developer-tools
+  identity: null
+  notarize: false
   target:
     - target: dmg
-      arch: [x64, arm64]
-    - target: zip
-      arch: [x64, arm64]
+      arch: [universal]
+dmg:
+  sign: false
 deb:
   afterInstall: linux/after-install.tpl
 linux:

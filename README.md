@@ -40,7 +40,7 @@ Kubedeck is a *local* tool:
 
 ### Desktop app
 
-Download the installer for your platform from the [releases page](https://github.com/FloSch62/kubedeck/releases): Windows (`.exe`), macOS (`.dmg`, Intel + Apple Silicon), Linux (`.AppImage`/`.deb`).
+Download the installer for your platform from the [releases page](https://github.com/FloSch62/kubedeck/releases): Windows (`.exe`), macOS (universal `.dmg`), Linux (`.AppImage`/`.deb`).
 
 > **macOS note:** builds are not code-signed yet. On first launch, right-click the app and choose *Open* (or run `xattr -dr com.apple.quarantine /Applications/Kubedeck.app`).
 

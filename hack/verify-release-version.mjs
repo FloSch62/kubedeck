@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 
-const refName = process.env.GITHUB_REF_NAME;
+const refName = process.env.RELEASE_TAG || process.env.GITHUB_REF_NAME;
 
 if (!refName || !refName.startsWith('v')) {
   console.log('No release tag detected; skipping version check.');
