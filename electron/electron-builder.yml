@@ -6,15 +6,17 @@ directories:
   buildResources: build
 files:
   - dist/**
-  - build/icon.png
   - package.json
 asar: true
 extraResources:
   - from: ../client/dist
     to: client
+  - from: build/icons/256x256.png
+    to: icon.png
 icon: build/icon.png
 artifactName: kubedeck-${version}-${os}-${arch}.${ext}
 npmRebuild: false
+afterPack: scripts/after-pack.cjs
 win:
   target:
     - target: nsis
@@ -29,9 +31,15 @@ mac:
       arch: [x64, arm64]
     - target: zip
       arch: [x64, arm64]
+deb:
+  afterInstall: linux/after-install.tpl
 linux:
   category: Development
   synopsis: Kubernetes GUI
+  icon: build/icons
+  desktop:
+    entry:
+      StartupWMClass: Kubedeck
   target:
     - target: AppImage
       arch: [x64]

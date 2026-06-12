@@ -3,18 +3,25 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
 
-// Render the app icon from the client SVG; electron-builder derives the
-// platform formats (.ico/.icns/Linux sizes) from this single PNG.
+// Render the app icons from the client SVG: icon.png (1024px) feeds the
+// mac .icns / win .ico generation, icons/<size> the Linux hicolor set.
 const root = path.dirname(fileURLToPath(import.meta.url));
 const svg = path.resolve(root, '../../client/public/kubedeck.svg');
-const png = path.resolve(root, '../build/icon.png');
+const main = path.resolve(root, '../build/icon.png');
+const sizes = [16, 24, 32, 48, 64, 128, 256, 512, 1024];
 
 const mtime = async (p) => (await stat(p).catch(() => undefined))?.mtimeMs ?? 0;
 
-if ((await mtime(png)) > (await mtime(svg))) {
-  process.exit(0);
-}
+const outdated = async (p) => (await mtime(p)) <= (await mtime(svg));
 
-await mkdir(path.dirname(png), { recursive: true });
-await sharp(svg, { density: 300 }).resize(1024, 1024).png().toFile(png);
-console.log(`rendered ${png}`);
+const render = (size, file) => sharp(svg, { density: 300 }).resize(size, size).png().toFile(file);
+
+await mkdir(path.resolve(root, '../build/icons'), { recursive: true });
+if (await outdated(main)) {
+  await render(1024, main);
+  console.log(`rendered ${main}`);
+}
+for (const size of sizes) {
+  const file = path.resolve(root, `../build/icons/${size}x${size}.png`);
+  if (await outdated(file)) await render(size, file);
+}

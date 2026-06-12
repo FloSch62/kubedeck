@@ -30,7 +30,27 @@ export function TopBar() {
   return (
     <>
       <AppBar position="static" color="transparent" sx={{ borderBottom: 1, borderColor: 'divider' }}>
-        <Toolbar variant="dense" sx={{ gap: 1.5, minHeight: 52 }}>
+        {/* In the desktop app the window is frameless and this toolbar doubles as
+            the titlebar: it is a drag region, and the env(titlebar-area-*) vars
+            reserve space for the native window controls (traffic lights on the
+            left on macOS, min/max/close on the right on Windows/Linux). In a
+            regular browser the env() fallbacks make all of this a no-op. */}
+        <Toolbar
+          variant="dense"
+          sx={{
+            gap: 1.5,
+            minHeight: 52,
+            WebkitAppRegion: 'drag',
+            // double the specificity: MUI's responsive gutter rule wins otherwise
+            '&&': {
+              pl: 'calc(env(titlebar-area-x, 0px) + 16px)',
+              pr: 'calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 16px)',
+            },
+            '& button, & input, & a, & [role="button"], & [role="combobox"]': {
+              WebkitAppRegion: 'no-drag',
+            },
+          }}
+        >
           <Stack direction="row" alignItems="center" spacing={1} sx={{ mr: 1.5 }}>
             <Box
               component="img"

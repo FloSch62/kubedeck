@@ -11,6 +11,7 @@
   },
   "type": "module",
   "main": "dist/main.js",
+  "desktopName": "kubedeck.desktop",
   "scripts": {
     "build": "node scripts/render-icon.mjs && node esbuild.config.mjs && tsc --noEmit",
     "typecheck": "tsc --noEmit",

@@ -18,3 +18,15 @@ await build({
     js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);",
   },
 });
+
+// The preload runs in the sandboxed renderer, which only supports CJS.
+await build({
+  entryPoints: ['src/preload.ts'],
+  bundle: true,
+  outfile: 'dist/preload.js',
+  platform: 'node',
+  format: 'cjs',
+  target: 'node22',
+  sourcemap: true,
+  external: ['electron'],
+});

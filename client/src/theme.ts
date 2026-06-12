@@ -1,11 +1,7 @@
 import { alpha, createTheme, type Theme } from '@mui/material/styles';
 import type {} from '@mui/x-data-grid/themeAugmentation';
 
-export function buildTheme(mode: 'light' | 'dark'): Theme {
-  const dark = mode === 'dark';
-
-  const c = dark
-    ? {
+const darkColors = {
         primary: '#6e8bfb',
         secondary: '#2dd4bf',
         bgDefault: '#1b1b1f',
@@ -23,8 +19,9 @@ export function buildTheme(mode: 'light' | 'dark'): Theme {
         tooltipBg: '#2e2e34',
         selectedPill: 'rgba(255, 255, 255, 0.09)',
         selectedPillHover: 'rgba(255, 255, 255, 0.13)',
-      }
-    : {
+      };
+
+const lightColors = {
         primary: '#3b66f5',
         secondary: '#0d9488',
         bgDefault: '#fafafa',
@@ -43,6 +40,17 @@ export function buildTheme(mode: 'light' | 'dark'): Theme {
         selectedPill: 'rgba(0, 0, 0, 0.07)',
         selectedPillHover: 'rgba(0, 0, 0, 0.10)',
       };
+
+/** Colors the desktop app paints the native window-controls overlay with —
+ *  must match the rendered TopBar (AppBar uses `sidebar` as background). */
+export function titleBarColors(mode: 'light' | 'dark'): { color: string; symbolColor: string } {
+  const c = mode === 'dark' ? darkColors : lightColors;
+  return { color: c.sidebar, symbolColor: c.textPrimary };
+}
+
+export function buildTheme(mode: 'light' | 'dark'): Theme {
+  const dark = mode === 'dark';
+  const c = dark ? darkColors : lightColors;
 
   return createTheme({
     palette: {
